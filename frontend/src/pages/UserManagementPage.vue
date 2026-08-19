@@ -1,5 +1,5 @@
 <script setup>
-import { ref, onMounted } from 'vue';
+import { ref, onMounted, computed } from 'vue';
 import api from '../services/api';
 
 const fileInput  = ref(null);
@@ -14,6 +14,48 @@ function showToast(type, text) {
   if (toastTimer) clearTimeout(toastTimer);
   toast.value = { type, text };
   toastTimer = setTimeout(() => { toast.value = null; }, 4000);
+}
+
+
+const userSearch  = ref('');
+const userPage    = ref(1);
+const userPerPage = ref(10);
+const sortField   = ref('name');
+const sortDir     = ref('asc');
+
+function sortUsers(field) {
+  if (sortField.value === field) sortDir.value = sortDir.value === 'asc' ? 'desc' : 'asc';
+  else { sortField.value = field; sortDir.value = 'asc'; }
+  userPage.value = 1;
+}
+function sortIcon(field) {
+  if (sortField.value !== field) return '↕';
+  return sortDir.value === 'asc' ? '↑' : '↓';
+}
+
+const filteredUsers = computed(() => {
+  const q = userSearch.value.toLowerCase();
+  let list = users.value.filter(u =>
+    !q || u.name?.toLowerCase().includes(q) ||
+    u.email?.toLowerCase().includes(q) ||
+    u.jabatan?.toLowerCase().includes(q)
+  );
+  list = [...list].sort((a, b) => {
+    const va = String(a[sortField.value] || '').toLowerCase();
+    const vb = String(b[sortField.value] || '').toLowerCase();
+    return sortDir.value === 'asc' ? va.localeCompare(vb) : vb.localeCompare(va);
+  });
+  return list;
+});
+const userLastPage = computed(() => Math.ceil(filteredUsers.value.length / userPerPage.value) || 1);
+const pagedUsers   = computed(() => {
+  const start = (userPage.value - 1) * userPerPage.value;
+  return filteredUsers.value.slice(start, start + userPerPage.value);
+});
+function userPageNumbers() {
+  const range = [], delta = 2;
+  for (let i = Math.max(1, userPage.value - delta); i <= Math.min(userLastPage.value, userPage.value + delta); i++) range.push(i);
+  return range;
 }
 
 async function fetchUsers() {
@@ -102,6 +144,7 @@ function displayAccount(email) {
   return email?.replace('@ts.internal', '') || email;
 }
 
+
 const deleting = ref(null);
 
 async function deleteUser(user) {
@@ -188,25 +231,42 @@ async function deleteUser(user) {
     </div>
 
     <div class="table-responsive">
+
+      <!-- Toolbar -->
+      <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-bottom:12px;">
+        <div style="position:relative;flex:1;min-width:200px;">
+          <input v-model="userSearch" @input="userPage=1" type="text" placeholder="Cari nama, jabatan, akun..."
+            style="width:100%;padding:8px 12px 8px 34px;border:1px solid #e2e8f0;border-radius:8px;font-size:0.85rem;outline:none;background:#fff;box-sizing:border-box;">
+          <span style="position:absolute;left:10px;top:50%;transform:translateY(-50%);color:#94a3b8;">🔍</span>
+        </div>
+        <select v-model="userPerPage" @change="userPage=1"
+          style="padding:8px 12px;border:1px solid #e2e8f0;border-radius:8px;font-size:0.85rem;background:#fff;cursor:pointer;color:#334155;">
+          <option :value="10">10 / halaman</option>
+          <option :value="25">25 / halaman</option>
+          <option :value="50">50 / halaman</option>
+        </select>
+        <span style="font-size:0.8rem;color:#64748b;">Total: <strong>{{ filteredUsers.length }}</strong> user</span>
+      </div>
+
       <table style="width: 100%; border-collapse: collapse;">
         <thead>
-        <tr>
-          <th style="text-align: left; border-bottom: 1px solid var(--border); padding: 8px 10px;">Nama</th>
-          <th style="text-align: left; border-bottom: 1px solid var(--border); padding: 8px 10px;">JK</th>
-          <th style="text-align: left; border-bottom: 1px solid var(--border); padding: 8px 10px;">Jabatan</th>
-          <th style="text-align: left; border-bottom: 1px solid var(--border); padding: 8px 10px;">Account</th>
-          <th style="text-align: left; border-bottom: 1px solid var(--border); padding: 8px 10px;">Role</th>
-          <th style="text-align: left; border-bottom: 1px solid var(--border); padding: 8px 10px;">Aksi</th>
+        <tr style="background:#f8fafc;">
+          <th class="uth" style="cursor:pointer;user-select:none;" @click="sortUsers('name')">Nama <span style="opacity:.5;font-size:.8rem;">{{ sortIcon('name') }}</span></th>
+          <th class="uth" style="cursor:pointer;user-select:none;" @click="sortUsers('gender')">JK <span style="opacity:.5;font-size:.8rem;">{{ sortIcon('gender') }}</span></th>
+          <th class="uth" style="cursor:pointer;user-select:none;" @click="sortUsers('jabatan')">Jabatan <span style="opacity:.5;font-size:.8rem;">{{ sortIcon('jabatan') }}</span></th>
+          <th class="uth">Account</th>
+          <th class="uth">Role</th>
+          <th class="uth">Aksi</th>
         </tr>
       </thead>
       <tbody>
         <tr v-if="loadingUsers">
           <td colspan="6" style="padding: 24px; text-align: center; color: var(--muted);">Memuat data user...</td>
         </tr>
-        <tr v-else-if="users.length === 0">
-          <td colspan="6" style="padding: 24px; text-align: center; color: var(--muted);">Belum ada data user.</td>
+        <tr v-else-if="pagedUsers.length === 0">
+          <td colspan="6" style="padding: 24px; text-align: center; color: var(--muted);">Tidak ada user yang ditemukan.</td>
         </tr>
-        <tr v-for="user in users" :key="user.id" v-else style="border-bottom: 1px solid var(--border);">
+        <tr v-for="user in pagedUsers" :key="user.id" v-else style="border-bottom: 1px solid var(--border);">
           <td style="padding: 8px 10px; font-weight: 500;">{{ user.name }}</td>
           <td style="padding: 8px 10px; color: var(--muted);">{{ user.gender || '-' }}</td>
           <td style="padding: 8px 10px; color: var(--muted);">{{ user.jabatan || '-' }}</td>
@@ -228,11 +288,43 @@ async function deleteUser(user) {
         </tr>
       </tbody>
     </table>
+
+      <!-- User Pagination -->
+      <div v-if="userLastPage > 1" style="display:flex;justify-content:space-between;align-items:center;padding:12px 4px;flex-wrap:wrap;gap:8px;">
+        <span style="font-size:0.8rem;color:#64748b;">
+          Menampilkan {{ (userPage-1)*userPerPage+1 }}–{{ Math.min(userPage*userPerPage, filteredUsers.length) }} dari {{ filteredUsers.length }}
+        </span>
+        <div style="display:flex;gap:4px;">
+          <button class="pg-btn" :disabled="userPage<=1" @click="userPage=1">«</button>
+          <button class="pg-btn" :disabled="userPage<=1" @click="userPage--">‹</button>
+          <button v-for="n in userPageNumbers()" :key="n" class="pg-btn" :class="{'pg-active':n===userPage}" @click="userPage=n">{{ n }}</button>
+          <button class="pg-btn" :disabled="userPage>=userLastPage" @click="userPage++">›</button>
+          <button class="pg-btn" :disabled="userPage>=userLastPage" @click="userPage=userLastPage">»</button>
+        </div>
+      </div>
     </div>
   </section>
 </template>
 
 <style scoped>
+.uth {
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+  padding: 10px;
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #475569;
+  font-weight: 600;
+}
+.uth:hover { background: #f8fafc; }
+.pg-btn {
+  padding: 5px 10px; border: 1px solid #e2e8f0; border-radius: 6px;
+  background: #fff; color: #334155; font-size: 0.82rem; cursor: pointer; transition: all 0.15s; min-width: 32px;
+}
+.pg-btn:hover:not(:disabled) { background: #eff6ff; border-color: #93c5fd; color: #2563eb; }
+.pg-btn:disabled { opacity: 0.4; cursor: default; }
+.pg-active { background: #2563eb !important; color: #fff !important; border-color: #2563eb !important; }
 .toast-enter-active { animation: slideIn 0.3s ease; }
 .toast-leave-active { animation: slideIn 0.25s ease reverse; }
 @keyframes slideIn {

@@ -8,8 +8,16 @@ const router = useRouter();
 const item   = ref(null);
 const loading = ref(false);
 const saving  = ref(false);
+const savingForm = ref(false);
 const successMsg = ref('');
 const errorMsg   = ref('');
+const form = ref({
+  penyebab_permasalahan: '',
+  penyelesaian_masalah: '',
+  impact: '',
+  analisa: '',
+  end_time: ''
+});
 const apiBaseUrl = import.meta.env.VITE_API_URL || 'http://localhost:8000/api';
 
 // ───── helpers ─────
@@ -50,6 +58,11 @@ async function fetchDetail() {
   try {
     const { data } = await api.get(`/gangguan/${route.params.id}`);
     item.value = data;
+    form.value.penyebab_permasalahan = data.penyebab_permasalahan || '';
+    form.value.penyelesaian_masalah = data.penyelesaian_masalah || '';
+    form.value.impact = data.impact || '';
+    form.value.analisa = data.analisa || '';
+    form.value.end_time = data.end_time ? data.end_time.replace(' ', 'T').substring(0, 16) : '';
   } finally {
     loading.value = false;
   }
@@ -62,13 +75,33 @@ async function updateStatus(newStatus) {
   successMsg.value = '';
   errorMsg.value   = '';
   try {
-    const { data } = await api.patch(`/gangguan/${route.params.id}`, { status: newStatus });
+    const payload = { status: newStatus };
+    if (newStatus === 'closed') {
+      Object.assign(payload, form.value);
+    }
+    const { data } = await api.patch(`/gangguan/${route.params.id}`, payload);
     item.value = data;
     successMsg.value = `Status berhasil diubah menjadi "${statusLabel(newStatus)}".`;
   } catch (err) {
     errorMsg.value = err.response?.data?.message || 'Gagal mengubah status.';
   } finally {
     saving.value = false;
+  }
+}
+
+async function updateDetail() {
+  if (savingForm.value) return;
+  savingForm.value = true;
+  successMsg.value = '';
+  errorMsg.value   = '';
+  try {
+    const { data } = await api.patch(`/gangguan/${route.params.id}`, form.value);
+    item.value = data;
+    successMsg.value = 'Detail penanganan berhasil disimpan.';
+  } catch (err) {
+    errorMsg.value = err.response?.data?.message || 'Gagal menyimpan detail.';
+  } finally {
+    savingForm.value = false;
   }
 }
 
@@ -161,6 +194,12 @@ onMounted(fetchDetail);
             </p>
           </div>
 
+          <!-- Impact -->
+          <div v-if="item.status === 'closed'" style="padding:13px 16px;border-radius:12px;background:#eef2ff;border:1px solid #c7d2fe;">
+            <p style="margin:0 0 3px;font-size:.72rem;color:#4f46e5;text-transform:uppercase;letter-spacing:.06em;">💥 Impact</p>
+            <p style="margin:0;font-weight:700;font-size:.95rem;color:#312e81;">{{ item.impact || '-' }}</p>
+          </div>
+
         </div>
 
         <!-- Detail Info -->
@@ -177,12 +216,31 @@ onMounted(fetchDetail);
             <p style="margin:0 0 2px;font-size:.72rem;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;">Ditangani Oleh</p>
             <p style="margin:0;font-weight:600;">{{ item.assignee?.name || '-' }}</p>
           </div>
+
+          <!-- Penyebab & Penyelesaian -->
+          <template v-if="item.status === 'closed'">
+            <div style="padding:11px 14px;border-radius:10px;background:#eef2ff;border:1px solid #c7d2fe;">
+              <p style="margin:0 0 2px;font-size:.72rem;color:#4f46e5;text-transform:uppercase;letter-spacing:.06em;">Penyebab Permasalahan</p>
+              <p style="margin:0;font-weight:600;color:#312e81;white-space:pre-wrap;">{{ item.penyebab_permasalahan || '-' }}</p>
+            </div>
+            <div style="padding:11px 14px;border-radius:10px;background:#eef2ff;border:1px solid #c7d2fe;">
+              <p style="margin:0 0 2px;font-size:.72rem;color:#4f46e5;text-transform:uppercase;letter-spacing:.06em;">Penyelesaian Masalah</p>
+              <p style="margin:0;font-weight:600;color:#312e81;white-space:pre-wrap;">{{ item.penyelesaian_masalah || '-' }}</p>
+            </div>
+          </template>
         </div>
 
-        <!-- Deskripsi -->
-        <div v-if="item.deskripsi" style="padding:13px 16px;border-radius:12px;background:var(--bg,#f9fafb);border:1px solid var(--border);">
-          <p style="margin:0 0 6px;font-size:.72rem;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;">Deskripsi / Keterangan Gangguan</p>
-          <p style="margin:0;white-space:pre-wrap;line-height:1.7;font-size:.95rem;">{{ item.deskripsi }}</p>
+        <!-- Deskripsi & Analisa -->
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:10px;">
+          <div v-if="item.deskripsi" style="padding:13px 16px;border-radius:12px;background:var(--bg,#f9fafb);border:1px solid var(--border);">
+            <p style="margin:0 0 6px;font-size:.72rem;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;">Deskripsi / Keterangan Gangguan</p>
+            <p style="margin:0;white-space:pre-wrap;line-height:1.7;font-size:.95rem;">{{ item.deskripsi }}</p>
+          </div>
+
+          <div v-if="item.status === 'closed'" style="padding:13px 16px;border-radius:12px;background:#eef2ff;border:1px solid #c7d2fe;">
+            <p style="margin:0 0 6px;font-size:.72rem;color:#4f46e5;text-transform:uppercase;letter-spacing:.06em;">Analisa TS</p>
+            <p style="margin:0;white-space:pre-wrap;line-height:1.7;font-size:.95rem;color:#312e81;">{{ item.analisa || '-' }}</p>
+          </div>
         </div>
       </article>
 
@@ -199,6 +257,42 @@ onMounted(fetchDetail);
         <div v-if="errorMsg" style="margin-bottom:12px;padding:11px 14px;border-radius:10px;background:#fde8e8;border:1px solid #fca5a5;color:#991b1b;font-weight:600;">
           ⚠️ {{ errorMsg }}
         </div>
+
+        <!-- Form Update Detail Penanganan (Hanya jika In Progress) -->
+        <div v-else-if="item.status === 'in_progress'" style="display:flex;flex-direction:column;gap:12px;margin-bottom:16px;">
+          <div>
+            <label style="display:block;margin-bottom:4px;font-size:.85rem;font-weight:600;">Penyebab Permasalahan</label>
+            <textarea v-model="form.penyebab_permasalahan" rows="2" style="width:100%;padding:10px;border-radius:8px;border:1px solid var(--border);font-family:inherit;"></textarea>
+          </div>
+          <div>
+            <label style="display:block;margin-bottom:4px;font-size:.85rem;font-weight:600;">Penyelesaian Masalah</label>
+            <textarea v-model="form.penyelesaian_masalah" rows="2" style="width:100%;padding:10px;border-radius:8px;border:1px solid var(--border);font-family:inherit;"></textarea>
+          </div>
+          <div>
+            <label style="display:block;margin-bottom:4px;font-size:.85rem;font-weight:600;">Impact</label>
+            <textarea v-model="form.impact" rows="2" style="width:100%;padding:10px;border-radius:8px;border:1px solid var(--border);font-family:inherit;"></textarea>
+          </div>
+          <div>
+            <label style="display:block;margin-bottom:4px;font-size:.85rem;font-weight:600;">Analisa</label>
+            <textarea v-model="form.analisa" rows="2" style="width:100%;padding:10px;border-radius:8px;border:1px solid var(--border);font-family:inherit;"></textarea>
+          </div>
+          <div>
+            <label style="display:block;margin-bottom:4px;font-size:.85rem;font-weight:600;">Waktu Selesai (End Downtime)</label>
+            <input type="datetime-local" v-model="form.end_time" style="width:100%;padding:10px;border-radius:8px;border:1px solid var(--border);font-family:inherit;background:#fff;">
+            <p style="margin:4px 0 0;font-size:.75rem;color:var(--muted);">Kosongkan untuk otomatis mengisi waktu saat ini ketika status diubah menjadi Closed.</p>
+          </div>
+          <div>
+            <button
+              :disabled="savingForm"
+              @click="updateDetail"
+              style="padding:8px 16px;border-radius:8px;border:none;cursor:pointer;font-weight:700;font-size:.85rem;background:var(--primary);color:#fff;transition:opacity .15s;"
+              :style="savingForm ? 'opacity:.6;cursor:not-allowed;' : ''"
+            >
+              {{ savingForm ? 'Menyimpan...' : '💾 Simpan Detail Penanganan' }}
+            </button>
+          </div>
+        </div>
+        <hr v-if="item.status !== 'open'" style="border:none;border-top:1px dashed var(--border);margin:20px 0;">
 
         <!-- Tombol ubah status -->
         <div style="display:flex;flex-wrap:wrap;gap:10px;margin-bottom:16px;">

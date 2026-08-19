@@ -27,6 +27,10 @@ class Gangguan extends Model
         'read_by',
         'resolved_at',
         'resolved_by',
+        'penyebab_permasalahan',
+        'penyelesaian_masalah',
+        'impact',
+        'analisa',
     ];
 
     protected function casts(): array

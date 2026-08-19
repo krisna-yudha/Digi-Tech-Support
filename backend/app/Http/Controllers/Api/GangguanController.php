@@ -15,9 +15,27 @@ class GangguanController extends Controller
     {
         $this->requireRoles(request(), ['Admin', 'TS']);
 
-        $data = Gangguan::with(['creator:id,name', 'assignee:id,name'])
-            ->latest()
-            ->paginate(10);
+        $allowed  = ['created_at', 'start_time', 'end_time', 'durasi', 'kategori', 'status', 'priority'];
+        $sortBy   = in_array(request('sort_by'), $allowed) ? request('sort_by') : 'created_at';
+        $sortDir  = request('sort_dir') === 'asc' ? 'asc' : 'desc';
+        $perPage  = min((int) request('per_page', 10), 100);
+
+        $query = Gangguan::with(['creator:id,name', 'assignee:id,name'])
+            ->orderBy($sortBy, $sortDir);
+
+        if (request()->filled('status')) {
+            $query->where('status', request('status'));
+        }
+        if (request()->filled('search')) {
+            $q = '%' . request('search') . '%';
+            $query->where(function ($w) use ($q) {
+                $w->where('judul', 'like', $q)
+                  ->orWhere('ticket_number', 'like', $q)
+                  ->orWhereHas('creator', fn($r) => $r->where('name', 'like', $q));
+            });
+        }
+
+        $data = $query->paginate($perPage);
 
         return response()->json($data);
     }
@@ -51,6 +69,7 @@ class GangguanController extends Controller
         $payload['created_by'] = $request->user()->id;
         $payload['status'] = $payload['status'] ?? 'open';
         $payload['priority'] = $payload['priority'] ?? 'medium';
+        $payload['start_time'] = $payload['start_time'] ?? now();
         $payload['durasi'] = $this->calculateDuration($payload['start_time'] ?? null, $payload['end_time'] ?? null);
 
         unset($payload['cubicle'], $payload['agent_name'], $payload['problem']);
@@ -106,6 +125,10 @@ class GangguanController extends Controller
             'assigned_to'=> ['nullable', 'exists:users,id'],
             'start_time' => ['nullable', 'date'],
             'end_time'   => ['nullable', 'date', 'after_or_equal:start_time'],
+            'penyebab_permasalahan' => ['nullable', 'string'],
+            'penyelesaian_masalah'  => ['nullable', 'string'],
+            'impact'                => ['nullable', 'string'],
+            'analisa'               => ['nullable', 'string'],
         ]);
 
         $startTime = $payload['start_time'] ?? $gangguan->start_time;
@@ -117,6 +140,13 @@ class GangguanController extends Controller
         if ($newStatus === 'closed' && $gangguan->status !== 'closed') {
             $payload['resolved_at'] = now();
             $payload['resolved_by'] = $request->user()->id;
+            
+            // Auto set end_time if not provided manually by TS
+            if (!isset($payload['end_time']) && is_null($gangguan->end_time)) {
+                $payload['end_time'] = now();
+                $endTime = $payload['end_time'];
+                $payload['durasi'] = $this->calculateDuration($startTime, $endTime);
+            }
         }
 
         // Auto-stamp read_at jika belum ada (TS update tanpa buka detail dulu)
