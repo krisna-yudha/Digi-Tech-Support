@@ -57,10 +57,14 @@ class UserController extends Controller
         ]);
 
         $file = $request->file('file');
-        $path = $file->getPathname();
         
-        $handle = @fopen($path, 'r');
+        // Simpan file sementara di storage lokal (menghindari error permission/open_basedir di /tmp pada production)
+        $path = $file->storeAs('temp', 'import_users_' . time() . '.csv', 'local');
+        $fullPath = storage_path('app/' . $path);
+        
+        $handle = @fopen($fullPath, 'r');
         if (!$handle) {
+            @unlink($fullPath);
             return response()->json(['message' => 'Gagal membuka file. Pastikan file valid.'], 500);
         }
         
@@ -165,6 +169,7 @@ class UserController extends Controller
             ];
         }
         fclose($handle);
+        @unlink($fullPath);
 
         if (empty($parsedUsers)) {
             return response()->json([
