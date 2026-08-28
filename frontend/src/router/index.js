@@ -23,7 +23,7 @@ const routes = [
   { path: '/gangguan', name: 'gangguan-list', component: GangguanListPage, meta: { roles: ['Admin', 'TS'] } },
   { path: '/gangguan/create', name: 'gangguan-create', component: GangguanCreatePage, meta: { roles: ['Agent', 'TS', 'Admin'] } },
   { path: '/gangguan/:id', name: 'gangguan-detail', component: GangguanDetailPage, meta: { roles: ['Admin', 'TS'] } },
-  { path: '/gangguan/:id/upload', name: 'upload-evidence', component: UploadEvidencePage, meta: { roles: ['TS'] } },
+  { path: '/gangguan/:id/upload', name: 'upload-evidence', component: UploadEvidencePage, meta: { roles: ['Admin', 'TS'] } },
   { path: '/summary', name: 'summary', component: SummaryPage, meta: { roles: ['Admin'] } },
   { path: '/backup', name: 'backup', component: BackupPage, meta: { roles: ['Admin'] } },
   { path: '/users', name: 'users', component: UserManagementPage, meta: { roles: ['Admin'] } },

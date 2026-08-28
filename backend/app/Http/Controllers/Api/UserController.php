@@ -57,10 +57,16 @@ class UserController extends Controller
         ]);
 
         $file = $request->file('file');
+        $path = $file->getPathname();
         
-        $handle = fopen($file->getRealPath(), 'r');
+        $handle = @fopen($path, 'r');
+        if (!$handle) {
+            return response()->json(['message' => 'Gagal membuka file. Pastikan file valid.'], 500);
+        }
+        
         $firstLine = fgets($handle);
         if ($firstLine === false) {
+            fclose($handle);
             return response()->json(['message' => 'File kosong atau tidak valid.'], 422);
         }
         
@@ -78,9 +84,9 @@ class UserController extends Controller
         
         rewind($handle);
         // Lewati BOM (Byte Order Mark) jika ada
-        $content = file_get_contents($file->getRealPath());
-        if (substr($content, 0, 3) === "\xEF\xBB\xBF") {
-            fseek($handle, 3);
+        $bom = fread($handle, 3);
+        if ($bom !== "\xEF\xBB\xBF") {
+            rewind($handle);
         }
 
         $parsedUsers = [];
