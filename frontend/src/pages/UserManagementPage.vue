@@ -127,32 +127,53 @@ async function onFileChange(event) {
   }
 }
 
-// Step 2: user confirms in modal → send parsed JSON to /import
+// Step 2: user confirms in modal → send parsed JSON in BATCHES to avoid server timeout
+const BATCH_SIZE = 15;  // kirim 15 user per request agar tidak timeout
+const importStatus = ref(null); // { done, total, failed }
+
 async function confirmImport() {
   uploading.value = true;
   progress.value  = 0;
+  importStatus.value = null;
   showPreviewModal.value = false;
 
-  const interval = setInterval(() => {
-    if (progress.value < 85) progress.value += Math.random() * 12;
-  }, 180);
-
-  try {
-    const { data } = await api.post('/users/import', { users: previewData.value });
-    clearInterval(interval);
-    progress.value = 100;
-    setTimeout(() => {
-      uploading.value = false;
-      progress.value  = 0;
-      showToast('success', data.message);
-      fetchUsers();
-    }, 400);
-  } catch (err) {
-    clearInterval(interval);
-    uploading.value = false;
-    progress.value  = 0;
-    showToast('error', err.response?.data?.message || 'Gagal mengimport data.');
+  const allUsers  = previewData.value;
+  const total     = allUsers.length;
+  const batches   = [];
+  for (let i = 0; i < total; i += BATCH_SIZE) {
+    batches.push(allUsers.slice(i, i + BATCH_SIZE));
   }
+
+  let done   = 0;
+  let failed = 0;
+  const errors = [];
+
+  for (let bIdx = 0; bIdx < batches.length; bIdx++) {
+    try {
+      await api.post('/users/import', { users: batches[bIdx] });
+      done += batches[bIdx].length;
+    } catch (err) {
+      failed += batches[bIdx].length;
+      errors.push(err.response?.data?.message || `Batch ${bIdx + 1} gagal.`);
+    }
+    // Progress akurat berdasarkan batch yang selesai
+    progress.value = Math.round(((bIdx + 1) / batches.length) * 100);
+    // Jeda singkat agar server tidak kelelahan
+    await new Promise(r => setTimeout(r, 300));
+  }
+
+  uploading.value = false;
+
+  if (failed === 0) {
+    showToast('success', `Berhasil mengimport ${done} dari ${total} data agent.`);
+  } else if (done > 0) {
+    showToast('error', `${done} berhasil, ${failed} gagal. ${errors[0] || ''}`);
+  } else {
+    showToast('error', `Semua data gagal diimport. ${errors[0] || ''}`);
+  }
+
+  setTimeout(() => { progress.value = 0; }, 1000);
+  fetchUsers();
 }
 
 function displayAccount(email) {

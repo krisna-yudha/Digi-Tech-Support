@@ -213,7 +213,7 @@ class UserController extends Controller
                         'name'     => $userData['name'],
                         'gender'   => $userData['gender'] ?? '',
                         'jabatan'  => $userData['jabatan'] ?? '',
-                        'password' => Hash::make(!empty($userData['password']) ? $userData['password'] : '12345'),
+                        'password' => Hash::make(!empty($userData['password']) ? $userData['password'] : '12345', ['rounds' => 8]),
                     ]
                 );
 
