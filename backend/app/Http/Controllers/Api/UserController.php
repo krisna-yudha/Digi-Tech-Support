@@ -58,15 +58,16 @@ class UserController extends Controller
 
         $file = $request->file('file');
         
-        // Simpan file sementara di storage lokal (menghindari error permission/open_basedir di /tmp pada production)
-        $path = $file->storeAs('temp', 'import_users_' . time() . '.csv', 'local');
-        $fullPath = storage_path('app/' . $path);
-        
-        $handle = @fopen($fullPath, 'r');
-        if (!$handle) {
-            @unlink($fullPath);
-            return response()->json(['message' => 'Gagal membuka file. Pastikan file valid.'], 500);
+        // Membaca file langsung ke memori (menghindari error permission/open_basedir di filesystem production)
+        $content = $file->get();
+        if ($content === false) {
+            return response()->json(['message' => 'Gagal membaca isi file.'], 500);
         }
+
+        $handle = fopen('php://temp', 'r+');
+        fwrite($handle, $content);
+        rewind($handle);
+        
         
         $firstLine = fgets($handle);
         if ($firstLine === false) {
@@ -169,7 +170,6 @@ class UserController extends Controller
             ];
         }
         fclose($handle);
-        @unlink($fullPath);
 
         if (empty($parsedUsers)) {
             return response()->json([
