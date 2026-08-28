@@ -128,10 +128,23 @@ class UserController extends Controller
 
             if (empty(trim($name)) || empty(trim($account))) continue;
 
-            $email = str_contains($account, '@') ? $account : $account . '@ts.internal';
+            // Sanitasi account: hapus spasi dan karakter yang tidak valid di local-part email
+            $accountClean = trim($account);
+            if (str_contains($accountClean, '@')) {
+                // Sudah ada domain, gunakan apa adanya tapi trim spasi
+                $parts = explode('@', $accountClean, 2);
+                $localPart = preg_replace('/\s+/', '', $parts[0]);
+                $email = $localPart . '@' . trim($parts[1]);
+            } else {
+                // Bersihkan local part: ganti spasi dengan underscore, hilangkan karakter aneh
+                $localPart = preg_replace('/[^a-zA-Z0-9._+\-]/', '', str_replace(' ', '_', $accountClean));
+                $email = $localPart . '@ts.internal';
+            }
+
+            if (empty($email) || strlen($email) < 3) continue;
 
             $parsedUsers[] = [
-                'email'   => trim($email),
+                'email'   => $email,
                 'name'    => trim($name),
                 'gender'  => trim($gender),
                 'jabatan' => trim($jabatan),
@@ -184,7 +197,7 @@ class UserController extends Controller
         $request->validate([
             'users' => ['required', 'array', 'min:1'],
             'users.*.name'    => ['required', 'string'],
-            'users.*.email'   => ['required', 'email'],
+            'users.*.email'   => ['required', 'string', 'min:3'],  // tidak pakai rule 'email' agar @ts.internal lolos
             'users.*.gender'  => ['nullable', 'string'],
             'users.*.jabatan' => ['nullable', 'string'],
             'users.*.password'=> ['nullable', 'string'],
