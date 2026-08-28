@@ -1,6 +1,9 @@
 <script setup>
-import { onMounted, ref } from 'vue';
+import { onMounted, ref, watch, nextTick } from 'vue';
+import { useAuthStore } from '../stores/auth';
 import api from '../services/api';
+
+const auth = useAuthStore();
 
 const summary = ref(null);
 const loading = ref(false);
@@ -22,91 +25,184 @@ async function fetchSummary() {
   }
 }
 
+function formatDurasi(minutes) {
+  if (!minutes) return '0j 0m';
+  const h = Math.floor(minutes / 60);
+  const m = minutes % 60;
+  if (h > 0) return `${h}j ${m}m`;
+  return `${m}m`;
+}
+
+let statusChartInstance = null;
+let categoryChartInstance = null;
+
+watch(summary, async (newVal) => {
+  if (!newVal) return;
+  await nextTick();
+
+  // Render Status Chart
+  const ctxStatus = document.getElementById('statusChart');
+  if (ctxStatus) {
+    if (statusChartInstance) statusChartInstance.destroy();
+    statusChartInstance = new window.Chart(ctxStatus, {
+      type: 'doughnut',
+      data: {
+        labels: ['Open', 'In Progress', 'Closed'],
+        datasets: [{
+          data: [newVal.open || 0, newVal.in_progress || 0, newVal.closed || 0],
+          backgroundColor: ['#ef4444', '#f59e0b', '#10b981'],
+          borderWidth: 0
+        }]
+      },
+      options: { responsive: true, maintainAspectRatio: false, cutout: '75%', plugins: { legend: { position: 'bottom' } } }
+    });
+  }
+
+  // Render Category Chart
+  const ctxCategory = document.getElementById('categoryChart');
+  if (ctxCategory) {
+    if (categoryChartInstance) categoryChartInstance.destroy();
+    // Convert object to array of [key, value], sort descending by value, and extract back
+    const sortedKategori = Object.entries(newVal.by_kategori || {})
+      .sort((a, b) => b[1] - a[1]);
+    
+    const catLabels = sortedKategori.map(item => item[0]);
+    const catData = sortedKategori.map(item => item[1]);
+    
+    categoryChartInstance = new window.Chart(ctxCategory, {
+      type: 'bar',
+      data: {
+        labels: catLabels.length ? catLabels : ['Tanpa Kategori'],
+        datasets: [{
+          label: 'Jumlah Tiket',
+          data: catData.length ? catData : [0],
+          backgroundColor: '#3b82f6',
+          borderRadius: 4
+        }]
+      },
+      options: { responsive: true, maintainAspectRatio: false, scales: { y: { beginAtZero: true, ticks: { stepSize: 1 } } }, plugins: { legend: { display: false } } }
+    });
+  }
+});
+
 onMounted(fetchSummary);
 </script>
 
 <template>
-  <section class="grid" style="gap:16px;">
+  <section style="display:flex; flex-direction:column; gap:24px;">
 
     <!-- Header -->
-    <div class="page-title-wrap" style="grid-column:1/-1; display:flex; justify-content:space-between; align-items:flex-end; flex-wrap: wrap; gap: 16px;">
+    <div style="display:flex; justify-content:space-between; align-items:flex-end; border-bottom: 1px solid #e2e8f0; padding-bottom: 16px;">
       <div>
-        <h2 class="page-title">Dashboard Admin</h2>
-        <p class="page-desc">Ringkasan status gangguan dan navigasi cepat.</p>
-      </div>
-
-      <!-- Date Filter -->
-      <div style="display:flex; gap:8px; align-items:center; background: #fff; padding: 12px; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.05);">
-        <div>
-          <label style="font-size: 0.75rem; color: var(--text-muted); display: block; margin-bottom: 4px;">Dari Tanggal</label>
-          <input type="date" v-model="startDate" class="form-input" style="padding: 6px 10px; font-size: 0.85rem; border: 1px solid #ccc; border-radius: 6px;" />
-        </div>
-        <div>
-          <label style="font-size: 0.75rem; color: var(--text-muted); display: block; margin-bottom: 4px;">Sampai Tanggal</label>
-          <input type="date" v-model="endDate" class="form-input" style="padding: 6px 10px; font-size: 0.85rem; border: 1px solid #ccc; border-radius: 6px;" />
-        </div>
-        <button @click="fetchSummary" class="btn-primary" style="align-self: flex-end; padding: 8px 16px; font-size: 0.85rem; height: 35px; border: none; border-radius: 6px; cursor: pointer;">
-          Filter
-        </button>
+        <h2 style="margin:0 0 4px; font-size: 1.75rem; font-weight: 800; color: #0f172a;">Dashboard Overview</h2>
+        <p style="margin:0; font-size: 0.95rem; color: #64748b;">Selamat Datang, <b>{{ auth.user?.name || 'User' }}</b> 👋. Berikut adalah ringkasan status sistem.</p>
       </div>
     </div>
 
     <!-- Status Stats -->
-    <div style="grid-column:1/-1;" class="grid-cols-4">
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 20px;">
       <template v-if="loading">
-        <div v-for="i in 4" :key="i" class="stat-card" style="animation:pulse 1.2s infinite alternate;background:#ededea;">
-          <div class="stat-value" style="color:transparent;background:#ddd;border-radius:6px;width:40px;">0</div>
-          <div class="stat-label">&nbsp;</div>
-        </div>
+        <div v-for="i in 6" :key="i" style="background:#fff; border-radius:12px; height:100px; animation:pulse 1.2s infinite alternate; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05); border: 1px solid #f1f5f9;"></div>
       </template>
 
       <template v-else-if="summary">
-      <div class="stat-card">
-        <div class="stat-value" style="color:var(--primary);">{{ summary.total ?? 0 }}</div>
-        <div class="stat-label">Total Tiket</div>
-      </div>
-      <div class="stat-card">
-        <div class="stat-value" style="color:var(--success);">{{ summary.open ?? 0 }}</div>
-        <div class="stat-label">Open</div>
-      </div>
-      <div class="stat-card">
-        <div class="stat-value" style="color:var(--warn);">{{ summary.in_progress ?? 0 }}</div>
-        <div class="stat-label">In Progress</div>
-      </div>
-      <div class="stat-card">
-        <div class="stat-value" style="color:var(--info);">{{ summary.closed ?? 0 }}</div>
-        <div class="stat-label">Closed</div>
-      </div>
+        <!-- Total Tiket -->
+        <div class="corp-stat-card">
+          <div class="corp-stat-icon" style="background: #eff6ff; color: #3b82f6;">
+            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="currentColor" viewBox="0 0 24 24"><path d="M20 4H4c-1.11 0-1.99.89-1.99 2L2 18c0 1.11.89 2 2 2h16c1.11 0 2-.89 2-2V6c0-1.11-.89-2-2-2zm0 14H4V6h16v12zm-9-1h2v-2h-2v2zm0-4h2V7h-2v6z"/></svg>
+          </div>
+          <div>
+            <p class="corp-stat-label">Total Tiket</p>
+            <h3 class="corp-stat-value">{{ summary.total ?? 0 }}</h3>
+          </div>
+        </div>
+
+        <!-- Open -->
+        <div class="corp-stat-card">
+          <div class="corp-stat-icon" style="background: #fef2f2; color: #ef4444;">
+            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="currentColor" viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/></svg>
+          </div>
+          <div>
+            <p class="corp-stat-label">Open</p>
+            <h3 class="corp-stat-value">{{ summary.open ?? 0 }}</h3>
+          </div>
+        </div>
+
+        <!-- In Progress -->
+        <div class="corp-stat-card">
+          <div class="corp-stat-icon" style="background: #fffbeb; color: #f59e0b;">
+            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="currentColor" viewBox="0 0 24 24"><path d="M11.99 2C6.47 2 2 6.48 2 12s4.47 10 9.99 10C17.52 22 22 17.52 22 12S17.52 2 11.99 2zM12 20c-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8-3.58 8-8 8zm.5-13H11v6l5.25 3.15.75-1.23-4.5-2.67z"/></svg>
+          </div>
+          <div>
+            <p class="corp-stat-label">In Progress</p>
+            <h3 class="corp-stat-value">{{ summary.in_progress ?? 0 }}</h3>
+          </div>
+        </div>
+
+        <!-- Closed -->
+        <div class="corp-stat-card">
+          <div class="corp-stat-icon" style="background: #ecfdf5; color: #10b981;">
+            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="currentColor" viewBox="0 0 24 24"><path d="M9 16.2L4.8 12l-1.4 1.4L9 19 21 7l-1.4-1.4L9 16.2z"/></svg>
+          </div>
+          <div>
+            <p class="corp-stat-label">Closed</p>
+            <h3 class="corp-stat-value">{{ summary.closed ?? 0 }}</h3>
+          </div>
+        </div>
+
+        <!-- Waktu Kendala -->
+        <div class="corp-stat-card">
+          <div class="corp-stat-icon" style="background: #fdf4ff; color: #d946ef;">
+            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="currentColor" viewBox="0 0 24 24"><path d="M11.99 2C6.47 2 2 6.48 2 12s4.47 10 9.99 10C17.52 22 22 17.52 22 12S17.52 2 11.99 2zM12 20c-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8-3.58 8-8 8zm1-13h-2v5l4.28 2.54.72-1.21-3-1.78z"/></svg>
+          </div>
+          <div>
+            <p class="corp-stat-label">Total Waktu Kendala</p>
+            <h3 class="corp-stat-value">{{ formatDurasi(summary.total_downtime) }}</h3>
+          </div>
+        </div>
+
+        <!-- Agent Terdampak -->
+        <div class="corp-stat-card">
+          <div class="corp-stat-icon" style="background: #eef2ff; color: #6366f1;">
+            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="currentColor" viewBox="0 0 24 24"><path d="M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5c-1.66 0-3 1.34-3 3s1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5C6.34 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z"/></svg>
+          </div>
+          <div>
+            <p class="corp-stat-label">Agent Terdampak</p>
+            <h3 class="corp-stat-value">{{ summary.total_agent_terdampak ?? 0 }}</h3>
+          </div>
+        </div>
       </template>
     </div>
 
     <!-- Informative Data -->
-    <div style="grid-column:1/-1; display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px;" v-if="summary && !loading">
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 24px;" v-if="summary && !loading">
       
-      <!-- By Kategori -->
-      <div class="card" style="background: #fff; padding: 20px; border-radius: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.04);">
-        <h3 style="font-size:1rem;font-weight:700;margin-bottom:16px; border-bottom: 1px solid #eee; padding-bottom: 8px;">Tiket Berdasarkan Kategori</h3>
-        <div v-if="Object.keys(summary.by_kategori || {}).length === 0" style="color: var(--text-muted); font-size: 0.9rem;">
-          Tidak ada data.
+      <!-- By Status -->
+      <div class="corp-chart-card">
+        <h3 class="corp-chart-title">Statistik Status Tiket</h3>
+        <div style="position: relative; height: 260px; margin-top: 16px;">
+          <canvas id="statusChart"></canvas>
         </div>
-        <div v-else style="display:flex; flex-direction:column; gap:12px;">
-          <div v-for="(count, category) in summary.by_kategori" :key="category" style="display: flex; justify-content: space-between; align-items: center;">
-            <span style="font-size: 0.95rem; font-weight: 500; color: var(--text);">{{ category || 'Tanpa Kategori' }}</span>
-            <span style="background: var(--primary-lt); color: var(--primary-dk); padding: 4px 12px; border-radius: 20px; font-weight: 600; font-size: 0.85rem;">{{ count }}</span>
-          </div>
+      </div>
+
+      <!-- By Kategori -->
+      <div class="corp-chart-card" style="grid-column: span 2;">
+        <h3 class="corp-chart-title">Tiket Berdasarkan Kategori</h3>
+        <div style="position: relative; height: 260px; margin-top: 16px;">
+          <canvas id="categoryChart"></canvas>
         </div>
       </div>
 
       <!-- By Priority -->
-      <div class="card" style="background: #fff; padding: 20px; border-radius: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.04);">
-        <h3 style="font-size:1rem;font-weight:700;margin-bottom:16px; border-bottom: 1px solid #eee; padding-bottom: 8px;">Tiket Berdasarkan Prioritas</h3>
-        <div v-if="Object.keys(summary.by_priority || {}).length === 0" style="color: var(--text-muted); font-size: 0.9rem;">
+      <div class="corp-chart-card">
+        <h3 class="corp-chart-title">Tiket Berdasarkan Prioritas</h3>
+        <div v-if="Object.keys(summary.by_priority || {}).length === 0" style="color: #94a3b8; font-size: 0.95rem; text-align: center; margin-top: 40px;">
           Tidak ada data.
         </div>
-        <div v-else style="display:flex; flex-direction:column; gap:12px;">
-          <div v-for="(count, priority) in summary.by_priority" :key="priority" style="display: flex; justify-content: space-between; align-items: center;">
-            <span style="font-size: 0.95rem; font-weight: 500; color: var(--text);">{{ priority || 'Tanpa Prioritas' }}</span>
-            <span style="background: var(--info-lt); color: var(--info-dk); padding: 4px 12px; border-radius: 20px; font-weight: 600; font-size: 0.85rem;">{{ count }}</span>
+        <div v-else style="display:flex; flex-direction:column; gap:16px; margin-top: 20px;">
+          <div v-for="(count, priority) in summary.by_priority" :key="priority" style="display: flex; justify-content: space-between; align-items: center; padding: 12px 16px; background: #f8fafc; border-radius: 8px; border: 1px solid #f1f5f9;">
+            <span style="font-size: 1rem; font-weight: 600; color: #334155; text-transform: capitalize;">{{ priority || 'Tanpa Prioritas' }}</span>
+            <span style="background: #e0e7ff; color: #4338ca; padding: 4px 16px; border-radius: 99px; font-weight: 700; font-size: 0.9rem;">{{ count }}</span>
           </div>
         </div>
       </div>
@@ -115,3 +211,60 @@ onMounted(fetchSummary);
 
   </section>
 </template>
+
+<style scoped>
+.corp-stat-card {
+  background: white; 
+  padding: 24px; 
+  border-radius: 16px; 
+  box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05), 0 2px 4px -1px rgba(0,0,0,0.03); 
+  border: 1px solid #f1f5f9; 
+  display: flex; 
+  align-items: center; 
+  gap: 16px;
+  transition: transform 0.2s, box-shadow 0.2s;
+}
+.corp-stat-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 10px 15px -3px rgba(0,0,0,0.05), 0 4px 6px -2px rgba(0,0,0,0.025);
+}
+.corp-stat-icon {
+  width: 56px; 
+  height: 56px; 
+  border-radius: 14px; 
+  display: flex; 
+  align-items: center; 
+  justify-content: center; 
+  flex-shrink: 0;
+}
+.corp-stat-label {
+  margin: 0; 
+  font-size: 0.85rem; 
+  font-weight: 700; 
+  color: #64748b; 
+  text-transform: uppercase; 
+  letter-spacing: 0.05em;
+}
+.corp-stat-value {
+  margin: 4px 0 0; 
+  font-size: 1.8rem; 
+  font-weight: 800; 
+  color: #0f172a;
+}
+
+.corp-chart-card {
+  background: white; 
+  padding: 24px; 
+  border-radius: 16px; 
+  box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05), 0 2px 4px -1px rgba(0,0,0,0.03); 
+  border: 1px solid #f1f5f9;
+}
+.corp-chart-title {
+  font-size: 1.1rem; 
+  font-weight: 800; 
+  color: #0f172a; 
+  margin: 0; 
+  border-bottom: 1px solid #f1f5f9; 
+  padding-bottom: 12px;
+}
+</style>

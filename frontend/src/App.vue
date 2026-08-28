@@ -12,9 +12,9 @@ const navItems = computed(() => {
     { to: '/dashboard', label: 'Dashboard' },
     { to: '/gangguan',  label: 'Gangguan'  },
     { to: '/gangguan/create', label: 'Input Gangguan' },
-    { to: '/summary',   label: 'Summary'   },
     { to: '/backup',    label: 'Backup'    },
     { to: '/users',     label: 'Users'     },
+    { to: '/cubicles',  label: 'Cubicles'  },
     { to: '/settings',  label: 'Settings'  },
   ];
   if (auth.hasRole('TS')) return [
@@ -37,10 +37,10 @@ const roleLabel = computed(() => {
 </script>
 
 <template>
-  <div>
+  <div style="display:flex; flex-direction:column; min-height:100vh;">
     <!-- ── Top Bar ── -->
     <header v-if="showNav" class="top-bar">
-      <div class="container header-content" style="display:flex; align-items:center; gap:32px; padding: 14px 20px;">
+      <div class="container header-content">
         <!-- Logo & Title -->
         <div style="display:flex; align-items:center; gap:12px;">
           <div style="width:36px; height:36px; border-radius:10px; background:var(--primary); display:flex; align-items:center; justify-content:center; box-shadow:0 4px 10px rgba(38,149,239,0.2);">
@@ -55,26 +55,26 @@ const roleLabel = computed(() => {
         </div>
 
         <!-- Navigation -->
-        <nav v-if="showNav && navItems.length" class="nav" style="flex:1;">
+        <nav v-if="showNav && navItems.length" class="nav">
           <RouterLink v-for="item in navItems" :key="item.to" :to="item.to">
             {{ item.label }}
           </RouterLink>
         </nav>
 
         <!-- User Info & Logout -->
-        <div v-if="auth.isAuthenticated" class="header-actions" style="display:flex; align-items:center; gap:16px; margin-left:auto;">
-          <div style="text-align:right;">
-            <p style="font-size:0.85rem; font-weight:700;">{{ auth.user?.name }}</p>
-            <p style="font-size:0.72rem; color:var(--muted); text-transform:uppercase; letter-spacing:0.04em; font-weight:600;">{{ roleLabel }}</p>
+        <div v-if="auth.isAuthenticated" class="header-actions">
+          <div class="user-info-text">
+            <p style="font-size:0.85rem; font-weight:700; line-height:1.2;">{{ auth.user?.name }}</p>
+            <p style="font-size:0.72rem; color:var(--muted); text-transform:uppercase; letter-spacing:0.04em; font-weight:600; margin-top:2px;">{{ roleLabel }}</p>
           </div>
-          <div style="width:1px; height:24px; background:var(--border);"></div>
-          <button class="btn-ghost" style="padding:8px 16px; font-size:0.85rem; border-radius:8px;" @click="auth.logout()">Logout</button>
+          <div class="header-divider"></div>
+          <button class="btn-ghost btn-logout" @click="auth.logout()">Logout</button>
         </div>
       </div>
     </header>
 
     <!-- ── Content ── -->
-    <main class="main-content container">
+    <main class="main-content container" style="flex: 1;">
       <RouterView />
     </main>
 

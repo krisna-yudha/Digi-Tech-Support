@@ -12,6 +12,7 @@ import SummaryPage from '../pages/SummaryPage.vue';
 import BackupPage from '../pages/BackupPage.vue';
 import UserManagementPage from '../pages/UserManagementPage.vue';
 import SettingsPage from '../pages/SettingsPage.vue';
+import CubiclesPage from '../pages/CubiclesPage.vue';
 
 const routes = [
   { path: '/', redirect: '/dashboard' },
@@ -26,6 +27,7 @@ const routes = [
   { path: '/summary', name: 'summary', component: SummaryPage, meta: { roles: ['Admin'] } },
   { path: '/backup', name: 'backup', component: BackupPage, meta: { roles: ['Admin'] } },
   { path: '/users', name: 'users', component: UserManagementPage, meta: { roles: ['Admin'] } },
+  { path: '/cubicles', name: 'cubicles', component: CubiclesPage, meta: { roles: ['Admin'] } },
   { path: '/settings', name: 'settings', component: SettingsPage, meta: { roles: ['Admin'] } }
 ];
 

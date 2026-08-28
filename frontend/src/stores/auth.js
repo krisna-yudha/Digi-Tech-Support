@@ -2,8 +2,8 @@ import { defineStore } from 'pinia';
 
 export const useAuthStore = defineStore('auth', {
   state: () => ({
-    token: localStorage.getItem('token') || '',
-    user: JSON.parse(localStorage.getItem('user') || 'null')
+    token: sessionStorage.getItem('token') || '',
+    user: JSON.parse(sessionStorage.getItem('user') || 'null')
   }),
   getters: {
     isAuthenticated: (state) => Boolean(state.token),
@@ -14,14 +14,14 @@ export const useAuthStore = defineStore('auth', {
     setAuth(payload) {
       this.token = payload.token;
       this.user = payload.user;
-      localStorage.setItem('token', payload.token);
-      localStorage.setItem('user', JSON.stringify(payload.user));
+      sessionStorage.setItem('token', payload.token);
+      sessionStorage.setItem('user', JSON.stringify(payload.user));
     },
     logout() {
       this.token = '';
       this.user = null;
-      localStorage.removeItem('token');
-      localStorage.removeItem('user');
+      sessionStorage.removeItem('token');
+      sessionStorage.removeItem('user');
       window.location.href = '/login';
     },
     hasRole(roleName) {

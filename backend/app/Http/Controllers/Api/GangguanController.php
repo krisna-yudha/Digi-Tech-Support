@@ -15,7 +15,7 @@ class GangguanController extends Controller
     {
         $this->requireRoles(request(), ['Admin', 'TS']);
 
-        $allowed  = ['created_at', 'start_time', 'end_time', 'durasi', 'kategori', 'status', 'priority'];
+        $allowed  = ['created_at', 'start_time', 'end_time', 'durasi', 'kategori', 'status', 'priority', 'jenis_gangguan'];
         $sortBy   = in_array(request('sort_by'), $allowed) ? request('sort_by') : 'created_at';
         $sortDir  = request('sort_dir') === 'asc' ? 'asc' : 'desc';
         $perPage  = min((int) request('per_page', 10), 100);
@@ -26,6 +26,9 @@ class GangguanController extends Controller
         if (request()->filled('status')) {
             $query->where('status', request('status'));
         }
+        if (request()->filled('jenis_gangguan')) {
+            $query->where('jenis_gangguan', request('jenis_gangguan'));
+        }
         if (request()->filled('search')) {
             $q = '%' . request('search') . '%';
             $query->where(function ($w) use ($q) {
@@ -33,6 +36,25 @@ class GangguanController extends Controller
                   ->orWhere('ticket_number', 'like', $q)
                   ->orWhereHas('creator', fn($r) => $r->where('name', 'like', $q));
             });
+        }
+
+        if (request()->filled('period')) {
+            $period = request('period');
+            if ($period === 'today') {
+                $query->whereDate('created_at', Carbon::today());
+            } elseif ($period === 'this_week') {
+                $query->whereBetween('created_at', [Carbon::now()->startOfWeek(), Carbon::now()->endOfWeek()]);
+            } elseif ($period === 'this_month') {
+                $query->whereMonth('created_at', Carbon::now()->month)
+                      ->whereYear('created_at', Carbon::now()->year);
+            } elseif ($period === 'custom') {
+                if (request()->filled('start_date')) {
+                    $query->whereDate('created_at', '>=', request('start_date'));
+                }
+                if (request()->filled('end_date')) {
+                    $query->whereDate('created_at', '<=', request('end_date'));
+                }
+            }
         }
 
         $data = $query->paginate($perPage);
@@ -51,6 +73,7 @@ class GangguanController extends Controller
             'judul' => ['nullable', 'string', 'max:255'],
             'deskripsi' => ['nullable', 'string'],
             'status' => ['nullable', 'string', 'max:50'],
+            'jenis_gangguan' => ['nullable', 'string', 'in:Personal,Massal'],
             'kategori' => ['nullable', 'string', 'max:100'],
             'priority' => ['nullable', 'in:low,medium,high'],
             'assigned_to' => ['nullable', 'exists:users,id'],
@@ -68,6 +91,7 @@ class GangguanController extends Controller
         $payload['ticket_number'] = $this->generateTicketNumber();
         $payload['created_by'] = $request->user()->id;
         $payload['status'] = $payload['status'] ?? 'open';
+        $payload['jenis_gangguan'] = $payload['jenis_gangguan'] ?? 'Personal';
         $payload['priority'] = $payload['priority'] ?? 'medium';
         $payload['start_time'] = $payload['start_time'] ?? now();
         $payload['durasi'] = $this->calculateDuration($payload['start_time'] ?? null, $payload['end_time'] ?? null);
@@ -114,7 +138,7 @@ class GangguanController extends Controller
 
     public function update(Request $request, Gangguan $gangguan): JsonResponse
     {
-        $this->requireRoles($request, ['TS']);
+        $this->requireRoles($request, ['TS', 'Admin']);
 
         $payload = $request->validate([
             'judul'      => ['sometimes', 'required', 'string', 'max:255'],
@@ -128,6 +152,7 @@ class GangguanController extends Controller
             'penyebab_permasalahan' => ['nullable', 'string'],
             'penyelesaian_masalah'  => ['nullable', 'string'],
             'impact'                => ['nullable', 'string'],
+            'jumlah_agent_terdampak'=> ['nullable', 'integer', 'min:1'],
             'analisa'               => ['nullable', 'string'],
         ]);
 
@@ -137,6 +162,12 @@ class GangguanController extends Controller
 
         // Auto-stamp: catat waktu dan TS yang menyelesaikan tiket
         $newStatus = $payload['status'] ?? null;
+        
+        // Auto assign petugas TS (Shift) saat mulai ditangani (in_progress)
+        if ($newStatus === 'in_progress' && !isset($payload['assigned_to']) && is_null($gangguan->assigned_to)) {
+            $payload['assigned_to'] = $request->user()->id;
+        }
+
         if ($newStatus === 'closed' && $gangguan->status !== 'closed') {
             $payload['resolved_at'] = now();
             $payload['resolved_by'] = $request->user()->id;
@@ -162,7 +193,7 @@ class GangguanController extends Controller
 
     public function destroy(Request $request, Gangguan $gangguan): JsonResponse
     {
-        $this->requireRoles($request, ['Admin']);
+        $this->requireRoles($request, ['Admin', 'TS']);
 
         $gangguan->delete();
 

@@ -28,8 +28,10 @@ class Gangguan extends Model
         'resolved_at',
         'resolved_by',
         'penyebab_permasalahan',
+        'jenis_gangguan',
         'penyelesaian_masalah',
         'impact',
+        'jumlah_agent_terdampak',
         'analisa',
     ];
 

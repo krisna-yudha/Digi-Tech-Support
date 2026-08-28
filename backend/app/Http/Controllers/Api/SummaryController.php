@@ -59,6 +59,8 @@ class SummaryController extends Controller
             'by_kategori' => (clone $query)->selectRaw('kategori, COUNT(*) as total')
                 ->groupBy('kategori')
                 ->pluck('total', 'kategori'),
+            'total_downtime' => (int) (clone $query)->sum('durasi'),
+            'total_agent_terdampak' => (int) (clone $query)->where('jenis_gangguan', 'Massal')->sum('jumlah_agent_terdampak'),
         ];
     }
 
