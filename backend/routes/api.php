@@ -25,6 +25,7 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::delete('/gangguan/{gangguan}', [GangguanController::class, 'destroy']);
         Route::get('/users', [\App\Http\Controllers\Api\UserController::class, 'index']);
         Route::post('/users', [\App\Http\Controllers\Api\UserController::class, 'store']);
+        Route::post('/users/import/preview', [\App\Http\Controllers\Api\UserController::class, 'previewImport']);
         Route::post('/users/import', [\App\Http\Controllers\Api\UserController::class, 'importAgents']);
         Route::delete('/users/{user}', [\App\Http\Controllers\Api\UserController::class, 'destroy']);
     });

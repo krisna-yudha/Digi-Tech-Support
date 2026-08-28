@@ -50,31 +50,21 @@ class UserController extends Controller
         ], 201);
     }
 
-    public function importAgents(Request $request): JsonResponse
+    /**
+     * Parse CSV file content and return structured user data.
+     */
+    private function parseCsvContent(string $content): array|\Illuminate\Http\JsonResponse
     {
-        $request->validate([
-            'file' => ['required', 'file', 'max:2048'],
-        ]);
-
-        $file = $request->file('file');
-        
-        // Membaca file langsung ke memori (menghindari error permission/open_basedir di filesystem production)
-        $content = $file->get();
-        if ($content === false) {
-            return response()->json(['message' => 'Gagal membaca isi file.'], 500);
-        }
-
         $handle = fopen('php://temp', 'r+');
         fwrite($handle, $content);
         rewind($handle);
-        
-        
+
         $firstLine = fgets($handle);
         if ($firstLine === false) {
             fclose($handle);
             return response()->json(['message' => 'File kosong atau tidak valid.'], 422);
         }
-        
+
         // Deteksi delimiter dari baris pertama
         $delimiter = ',';
         $commaCount = substr_count($firstLine, ',');
@@ -86,7 +76,7 @@ class UserController extends Controller
         } elseif ($tabCount > $commaCount && $tabCount > $semicolonCount) {
             $delimiter = "\t";
         }
-        
+
         rewind($handle);
         // Lewati BOM (Byte Order Mark) jika ada
         $bom = fread($handle, 3);
@@ -96,129 +86,136 @@ class UserController extends Controller
 
         $parsedUsers = [];
         $isFirstLine = true;
-        $map = [
-            'name' => -1,
-            'gender' => -1,
-            'jabatan' => -1,
-            'account' => -1,
-            'password' => -1,
-        ];
+        $map = ['name' => -1, 'gender' => -1, 'jabatan' => -1, 'account' => -1, 'password' => -1];
 
         while (($row = fgetcsv($handle, 10000, $delimiter)) !== false) {
-            // Abaikan baris kosong
-            if (empty(array_filter($row))) {
-                continue;
-            }
+            if (empty(array_filter($row))) continue;
 
-            // Identifikasi baris header
             if ($isFirstLine) {
                 $isFirstLine = false;
                 $firstCell = strtoupper(trim($row[0] ?? ''));
                 if ($firstCell === 'NO' || !is_numeric($firstCell)) {
-                    // Map kolom berdasarkan nama header
-                    foreach($row as $idx => $colName) {
-                         $colName = strtoupper(trim($colName));
-                         if ($colName === 'NAMA' || $colName === 'NAME') $map['name'] = $idx;
-                         elseif ($colName === 'JK' || $colName === 'GENDER' || $colName === 'JENIS KELAMIN') $map['gender'] = $idx;
-                         elseif ($colName === 'JABATAN' || $colName === 'ROLE') $map['jabatan'] = $idx;
-                         elseif (in_array($colName, ['ACCOUNT', 'AKUN', 'EMAIL', 'USERNAME', 'USER'])) $map['account'] = $idx;
-                         elseif ($colName === 'PASSWORD' || $colName === 'PASS') $map['password'] = $idx;
+                    foreach ($row as $idx => $colName) {
+                        $col = strtoupper(trim($colName));
+                        if ($col === 'NAMA' || $col === 'NAME') $map['name'] = $idx;
+                        elseif (in_array($col, ['JK', 'GENDER', 'JENIS KELAMIN'])) $map['gender'] = $idx;
+                        elseif (in_array($col, ['JABATAN', 'ROLE'])) $map['jabatan'] = $idx;
+                        elseif (in_array($col, ['ACCOUNT', 'AKUN', 'EMAIL', 'USERNAME', 'USER'])) $map['account'] = $idx;
+                        elseif (in_array($col, ['PASSWORD', 'PASS'])) $map['password'] = $idx;
                     }
-                    continue; 
+                    continue;
                 }
             }
 
             $name = ''; $gender = ''; $jabatan = ''; $account = ''; $password = '';
 
-            // Gunakan mapping header jika ditemukan
             if ($map['name'] !== -1 && $map['account'] !== -1) {
                 $name     = trim($row[$map['name']] ?? '');
                 $gender   = $map['gender'] !== -1 ? trim($row[$map['gender']] ?? '') : '';
                 $jabatan  = $map['jabatan'] !== -1 ? trim($row[$map['jabatan']] ?? '') : '';
                 $account  = trim($row[$map['account']] ?? '');
-                $password = $map['password'] !== -1 && !empty(trim($row[$map['password']] ?? '')) ? trim($row[$map['password']]) : '12345';
+                $password = $map['password'] !== -1 && !empty(trim($row[$map['password']] ?? ''))
+                    ? trim($row[$map['password']]) : '12345';
             } else {
-                // Fallback jika tidak ada header (menebak dari posisi kolom)
                 if (count($row) >= 5 && (is_numeric($row[0]) || empty($row[0]))) {
-                    $name     = trim($row[1] ?? '');
-                    $gender   = trim($row[2] ?? '');
-                    $jabatan  = trim($row[3] ?? '');
-                    $account  = trim($row[4] ?? '');
+                    [$_, $name, $gender, $jabatan, $account] = $row;
                     $password = !empty(trim($row[5] ?? '')) ? trim($row[5]) : '12345';
                 } elseif (count($row) >= 4) {
-                    $name     = trim($row[0] ?? '');
-                    $gender   = trim($row[1] ?? '');
-                    $jabatan  = trim($row[2] ?? '');
-                    $account  = trim($row[3] ?? '');
+                    [$name, $gender, $jabatan, $account] = $row;
                     $password = !empty(trim($row[4] ?? '')) ? trim($row[4]) : '12345';
                 }
             }
 
-            if (empty($name) || empty($account)) {
-                continue;
-            }
+            if (empty(trim($name)) || empty(trim($account))) continue;
 
-            // Simpan email dengan domain internal
             $email = str_contains($account, '@') ? $account : $account . '@ts.internal';
 
             $parsedUsers[] = [
-                'email' => $email,
-                'name' => $name,
-                'gender' => $gender,
-                'jabatan' => $jabatan,
-                'password' => $password,
+                'email'   => trim($email),
+                'name'    => trim($name),
+                'gender'  => trim($gender),
+                'jabatan' => trim($jabatan),
+                'password'=> trim($password),
             ];
         }
         fclose($handle);
 
-        if (empty($parsedUsers)) {
-            return response()->json([
-                'message' => 'Tidak ada data agent yang valid di dalam file. Periksa kembali format file CSV Anda.'
-            ], 422);
+        return $parsedUsers;
+    }
+
+    /**
+     * Preview CSV import (parse only, no DB write).
+     */
+    public function previewImport(Request $request): JsonResponse
+    {
+        $request->validate(['file' => ['required', 'file', 'max:5120']]);
+
+        $content = $request->file('file')->get();
+        if ($content === false) {
+            return response()->json(['message' => 'Gagal membaca isi file.'], 500);
         }
 
-        $emailsToImport = array_column($parsedUsers, 'email');
-        $existingUsers = User::whereIn('email', $emailsToImport)->pluck('email')->toArray();
-        $overwrite = $request->boolean('overwrite', false);
+        $result = $this->parseCsvContent($content);
+        if ($result instanceof \Illuminate\Http\JsonResponse) return $result;
 
-        if (count($existingUsers) > 0 && !$overwrite) {
-            return response()->json([
-                'message' => count($existingUsers) . ' user sudah terdaftar di sistem. Apakah Anda ingin melanjutkan dan menimpa data mereka?',
-                'require_confirmation' => true
-            ], 409);
+        if (empty($result)) {
+            return response()->json(['message' => 'Tidak ada data agent yang valid. Periksa kembali format CSV Anda.'], 422);
         }
+
+        // Flag existing users
+        $emails = array_column($result, 'email');
+        $existing = User::whereIn('email', $emails)->pluck('email')->toArray();
+        foreach ($result as &$row) {
+            $row['exists'] = in_array($row['email'], $existing);
+        }
+
+        return response()->json([
+            'data'  => $result,
+            'total' => count($result),
+            'existing_count' => count($existing),
+        ]);
+    }
+
+    /**
+     * Commit import from pre-parsed JSON payload (no file re-read needed).
+     */
+    public function importAgents(Request $request): JsonResponse
+    {
+        $request->validate([
+            'users' => ['required', 'array', 'min:1'],
+            'users.*.name'    => ['required', 'string'],
+            'users.*.email'   => ['required', 'email'],
+            'users.*.gender'  => ['nullable', 'string'],
+            'users.*.jabatan' => ['nullable', 'string'],
+            'users.*.password'=> ['nullable', 'string'],
+        ]);
 
         DB::beginTransaction();
         try {
             $count = 0;
-            foreach ($parsedUsers as $userData) {
+            foreach ($request->input('users') as $userData) {
                 $user = User::updateOrCreate(
                     ['email' => $userData['email']],
                     [
                         'name'     => $userData['name'],
-                        'gender'   => $userData['gender'],
-                        'jabatan'  => $userData['jabatan'],
-                        'password' => Hash::make($userData['password']),
+                        'gender'   => $userData['gender'] ?? '',
+                        'jabatan'  => $userData['jabatan'] ?? '',
+                        'password' => Hash::make(!empty($userData['password']) ? $userData['password'] : '12345'),
                     ]
                 );
 
                 if (!$user->hasRole('Agent')) {
                     $user->assignRole('Agent');
                 }
-
                 $count++;
             }
             DB::commit();
         } catch (\Throwable $e) {
             DB::rollBack();
-            return response()->json([
-                'message' => 'Gagal memproses import data: ' . $e->getMessage()
-            ], 422);
+            return response()->json(['message' => 'Gagal memproses import: ' . $e->getMessage()], 422);
         }
 
-        return response()->json([
-            'message' => "Berhasil mengimport {$count} data agent."
-        ]);
+        return response()->json(['message' => "Berhasil mengimport {$count} data agent."]);
     }
 
     public function destroy(User $user, Request $request): JsonResponse
