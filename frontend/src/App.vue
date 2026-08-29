@@ -12,15 +12,13 @@ const navItems = computed(() => {
     { to: '/dashboard', label: 'Dashboard' },
     { to: '/gangguan',  label: 'Gangguan'  },
     { to: '/gangguan/create', label: 'Input Gangguan' },
-    { to: '/backup',    label: 'Backup'    },
-    { to: '/users',     label: 'Users'     },
-    { to: '/cubicles',  label: 'Cubicles'  },
     { to: '/settings',  label: 'Settings'  },
   ];
   if (auth.hasRole('TS')) return [
     { to: '/dashboard', label: 'Dashboard' },
     { to: '/gangguan',  label: 'Gangguan'  },
     { to: '/gangguan/create', label: 'Input Gangguan' },
+    { to: '/profil-ts', label: 'Digi TS' },
   ];
   if (auth.hasRole('Agent')) return [
     { to: '/agent-dashboard',  label: 'Dashboard'       },
@@ -29,11 +27,7 @@ const navItems = computed(() => {
   return [];
 });
 
-const roleLabel = computed(() => {
-  if (!auth.user) return '';
-  const roles = auth.user.roles ?? [];
-  return roles[0] ?? '';
-});
+const roleLabel = computed(() => auth.primaryRole);
 </script>
 
 <template>

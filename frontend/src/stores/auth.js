@@ -8,7 +8,17 @@ export const useAuthStore = defineStore('auth', {
   getters: {
     isAuthenticated: (state) => Boolean(state.token),
     roles: (state) => state.user?.roles || [],
-    primaryRole: (state) => state.user?.roles?.[0] || ''
+    // Ambil nama role: bisa string atau object {id, name}
+    roleNames: (state) => {
+      const roles = state.user?.roles || [];
+      return roles.map(r => typeof r === 'object' ? r.name : r);
+    },
+    primaryRole: (state) => {
+      const roles = state.user?.roles || [];
+      if (!roles.length) return '';
+      const first = roles[0];
+      return typeof first === 'object' ? first.name : first;
+    }
   },
   actions: {
     setAuth(payload) {
@@ -25,7 +35,8 @@ export const useAuthStore = defineStore('auth', {
       window.location.href = '/login';
     },
     hasRole(roleName) {
-      return this.roles.includes(roleName);
+      // Handle both array of strings and array of objects {id, name, ...}
+      return this.roleNames.includes(roleName);
     }
   }
 });

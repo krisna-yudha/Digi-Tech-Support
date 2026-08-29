@@ -33,6 +33,9 @@ class Gangguan extends Model
         'impact',
         'jumlah_agent_terdampak',
         'analisa',
+        'nomor_surat',
+        'kode',
+        'id_task_sip',
     ];
 
     protected function casts(): array

@@ -13,11 +13,13 @@ import BackupPage from '../pages/BackupPage.vue';
 import UserManagementPage from '../pages/UserManagementPage.vue';
 import SettingsPage from '../pages/SettingsPage.vue';
 import CubiclesPage from '../pages/CubiclesPage.vue';
+import TsProfilePage from '../pages/TsProfilePage.vue';
 
 const routes = [
   { path: '/', redirect: '/dashboard' },
   { path: '/login', name: 'login', component: LoginPage, meta: { guest: true } },
   { path: '/dashboard', name: 'dashboard', component: DashboardPage, meta: { roles: ['Admin', 'TS'] } },
+  { path: '/profil-ts', name: 'profil-ts', component: TsProfilePage, meta: { roles: ['TS', 'Admin'] } },
   { path: '/agent-dashboard', name: 'agent-dashboard', component: AgentDashboardPage, meta: { roles: ['Agent'] } },
   { path: '/agent/laporan/:id', name: 'agent-laporan-detail', component: AgentLaporanDetailPage, meta: { roles: ['Agent'] } },
   { path: '/gangguan', name: 'gangguan-list', component: GangguanListPage, meta: { roles: ['Admin', 'TS'] } },
@@ -25,9 +27,9 @@ const routes = [
   { path: '/gangguan/:id', name: 'gangguan-detail', component: GangguanDetailPage, meta: { roles: ['Admin', 'TS'] } },
   { path: '/gangguan/:id/upload', name: 'upload-evidence', component: UploadEvidencePage, meta: { roles: ['Admin', 'TS'] } },
   { path: '/summary', name: 'summary', component: SummaryPage, meta: { roles: ['Admin'] } },
-  { path: '/backup', name: 'backup', component: BackupPage, meta: { roles: ['Admin'] } },
-  { path: '/users', name: 'users', component: UserManagementPage, meta: { roles: ['Admin'] } },
-  { path: '/cubicles', name: 'cubicles', component: CubiclesPage, meta: { roles: ['Admin'] } },
+  { path: '/backup', redirect: to => ({ path: '/settings', query: { tab: 'backup' } }) },
+  { path: '/users', redirect: to => ({ path: '/settings', query: { tab: 'users' } }) },
+  { path: '/cubicles', redirect: to => ({ path: '/settings', query: { tab: 'cubicles' } }) },
   { path: '/settings', name: 'settings', component: SettingsPage, meta: { roles: ['Admin'] } }
 ];
 

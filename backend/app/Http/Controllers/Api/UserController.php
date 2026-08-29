@@ -228,7 +228,63 @@ class UserController extends Controller
             return response()->json(['message' => 'Gagal memproses import: ' . $e->getMessage()], 422);
         }
 
-        return response()->json(['message' => "Berhasil mengimport {$count} data agent."]);
+        return response()->json([
+            'message' => "Berhasil mengimport {$count} data naker/agent.",
+            'count'   => $count,
+        ]);
+    }
+
+    /**
+     * Upload signature image for logged-in user or specified user.
+     */
+    public function uploadSignature(Request $request): JsonResponse
+    {
+        $request->validate([
+            'signature' => ['required', 'image', 'mimes:png,jpg,jpeg,svg,webp', 'max:2048'],
+        ]);
+
+        $user = $request->user();
+
+        // Optional target user_id for Admin uploading on behalf of user
+        if ($request->has('user_id') && $user->hasRole('Admin')) {
+            $targetUser = User::find($request->input('user_id'));
+            if ($targetUser) $user = $targetUser;
+        }
+
+        $path = $request->file('signature')->store('signatures', 'public');
+
+        if ($user->signature && \Illuminate\Support\Facades\Storage::disk('public')->exists($user->signature)) {
+            \Illuminate\Support\Facades\Storage::disk('public')->delete($user->signature);
+        }
+
+        $user->signature = $path;
+        $user->save();
+
+        return response()->json([
+            'message'       => 'Tanda tangan berhasil diunggah.',
+            'signature_url' => asset('storage/' . $path),
+            'user'          => $user,
+        ]);
+    }
+
+    /**
+     * Delete signature image for logged-in user.
+     */
+    public function deleteSignature(Request $request): JsonResponse
+    {
+        $user = $request->user();
+
+        if ($user->signature && \Illuminate\Support\Facades\Storage::disk('public')->exists($user->signature)) {
+            \Illuminate\Support\Facades\Storage::disk('public')->delete($user->signature);
+        }
+
+        $user->signature = null;
+        $user->save();
+
+        return response()->json([
+            'message' => 'Tanda tangan akun Anda berhasil dihapus.',
+            'user'    => $user,
+        ]);
     }
 
     public function destroy(User $user, Request $request): JsonResponse

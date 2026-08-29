@@ -115,8 +115,24 @@ class GangguanController extends Controller
             ]);
         }
 
-        $gangguan->load(['creator:id,name', 'assignee:id,name', 'reader:id,name', 'resolver:id,name', 'evidences']);
+        $gangguan->load(['creator:id,name', 'assignee:id,name,signature', 'reader:id,name', 'resolver:id,name', 'evidences']);
 
+        $cubicleName = '';
+        if ($gangguan->deskripsi && preg_match('/Cubicle:\s*([^\n]+)/i', $gangguan->deskripsi, $matches)) {
+            $cubicleName = trim($matches[1]);
+        }
+        $gangguan->cubicle_name = $cubicleName;
+
+        if ($cubicleName) {
+            $cubicleData = \Illuminate\Support\Facades\DB::table('cubicles')
+                ->where('nama', $cubicleName)
+                ->first();
+            if ($cubicleData) {
+                $gangguan->cubicle_ext = $cubicleData->ext;
+                $gangguan->cubicle_ip = $cubicleData->ip;
+                $gangguan->cubicle_rochet = $cubicleData->rochet;
+            }
+        }
         return response()->json($gangguan);
     }
 
@@ -154,6 +170,9 @@ class GangguanController extends Controller
             'impact'                => ['nullable', 'string'],
             'jumlah_agent_terdampak'=> ['nullable', 'integer', 'min:1'],
             'analisa'               => ['nullable', 'string'],
+            'nomor_surat'           => ['nullable', 'string'],
+            'kode'                  => ['nullable', 'string'],
+            'id_task_sip'           => ['nullable', 'string'],
         ]);
 
         $startTime = $payload['start_time'] ?? $gangguan->start_time;
@@ -188,7 +207,12 @@ class GangguanController extends Controller
 
         $gangguan->update($payload);
 
-        return response()->json($gangguan->fresh(['creator:id,name', 'assignee:id,name', 'reader:id,name', 'resolver:id,name', 'evidences']));
+        $gangguan = $gangguan->fresh(['creator:id,name', 'assignee:id,name,signature', 'reader:id,name', 'resolver:id,name', 'evidences']);
+        $cubicle = \App\Models\Cubicle::where('nama', $gangguan->kategori)->first();
+        $gangguan->cubicle_ext = $cubicle->ext ?? '';
+        $gangguan->cubicle_ip = $cubicle->ip ?? '';
+
+        return response()->json($gangguan);
     }
 
     public function destroy(Request $request, Gangguan $gangguan): JsonResponse
@@ -199,6 +223,39 @@ class GangguanController extends Controller
 
         return response()->json([
             'message' => 'Gangguan berhasil dihapus.',
+        ]);
+    }
+
+    /**
+     * Get statistics & recent tickets handled by the currently authenticated TS user.
+     */
+    public function myTsStats(Request $request): JsonResponse
+    {
+        $user = $request->user();
+
+        $query = Gangguan::where(function($q) use ($user) {
+            $q->where('assigned_to', $user->id)
+              ->orWhere('resolved_by', $user->id);
+        });
+
+        $totalHandled = (clone $query)->count();
+        $totalClosed  = (clone $query)->where('status', 'closed')->count();
+        $totalActive  = (clone $query)->whereIn('status', ['open', 'in_progress'])->count();
+        $avgDuration  = (clone $query)->whereNotNull('durasi')->avg('durasi');
+
+        $recentList = (clone $query)
+            ->with(['creator:id,name', 'assignee:id,name,signature', 'evidences'])
+            ->orderBy('created_at', 'desc')
+            ->take(50)
+            ->get();
+
+        return response()->json([
+            'user'                 => $user,
+            'total_handled'        => $totalHandled,
+            'total_closed'         => $totalClosed,
+            'total_active'         => $totalActive,
+            'avg_duration_minutes' => round($avgDuration ?? 0, 1),
+            'gangguan_list'        => $recentList,
         ]);
     }
 

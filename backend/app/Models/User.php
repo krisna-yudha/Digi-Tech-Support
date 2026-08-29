@@ -6,6 +6,7 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
+use Illuminate\Support\Facades\Storage;
 use Laravel\Sanctum\HasApiTokens;
 use Spatie\Permission\Traits\HasRoles;
 
@@ -27,6 +28,7 @@ class User extends Authenticatable
         'password',
         'gender',
         'jabatan',
+        'signature',
     ];
 
     /**
@@ -38,6 +40,18 @@ class User extends Authenticatable
         'password',
         'remember_token',
     ];
+
+    protected $appends = [
+        'signature_url',
+    ];
+
+    public function getSignatureUrlAttribute(): ?string
+    {
+        if ($this->signature) {
+            return asset('storage/' . $this->signature);
+        }
+        return null;
+    }
 
     /**
      * Get the attributes that should be cast.

@@ -23,6 +23,7 @@ const filterEndDate = ref('');
 const filterJenis = ref('');
 
 const showFilters = ref(window.innerWidth > 768);
+const apiBaseUrl = import.meta.env.VITE_API_URL || 'http://localhost:8000/api';
 
 function getRowStyle(status) {
   const s = String(status || '').toLowerCase();
@@ -36,9 +37,22 @@ function formatDateOnly(v) {
   if (!v) return '-';
   return new Date(v).toLocaleDateString('id-ID', { day: '2-digit', month: 'short', year: 'numeric' });
 }
+function formatDateFull(v) {
+  if (!v) return '-';
+  return new Date(v).toLocaleDateString('id-ID', { day: '2-digit', month: 'long', year: 'numeric' });
+}
 function formatTimeOnly(v) {
   if (!v) return '-';
   return new Date(v).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }).replace(/\./g, ':');
+}
+function getMonthName(dateStr) {
+  if (!dateStr) return 'AGUSTUS';
+  const months = ['JANUARI', 'FEBRUARI', 'MARET', 'APRIL', 'MEI', 'JUNI', 'JULI', 'AGUSTUS', 'SEPTEMBER', 'OKTOBER', 'NOVEMBER', 'DESEMBER'];
+  return months[new Date(dateStr).getMonth()] || 'AGUSTUS';
+}
+function getYear(dateStr) {
+  if (!dateStr) return '2026';
+  return new Date(dateStr).getFullYear();
 }
 function calculateDurasi(start, end) {
   if (!start || !end) return '-';
@@ -119,23 +133,274 @@ function cancelDelete() {
   deleteConfirmId.value = null;
 }
 
-onMounted(() => fetchGangguan());
+// ───── Settings Template BA ─────
+const baSettings = ref({
+  ba_brand_name:    'PLN Icon Plus',
+  ba_departemen:    'Divisi Perencanaan Ops Ritel',
+  ba_title:         'BERITA ACARA KRONOLOGIS GANGGUAN APLIKASI/JARINGAN',
+  ba_location:      'SEMARANG',
+  ba_koord_name:    'AHMAD ZAENAL ARIFIN',
+  ba_koord_title:   'KOORDINATOR',
+  ba_ts_title:      'TECHNICAL SUPPORT',
+  ba_show_evidence: 'true',
+});
+
+async function fetchBaSettings() {
+  try {
+    const { data } = await api.get('/settings');
+    if (data) {
+      baSettings.value = { ...baSettings.value, ...data };
+    }
+  } catch (err) {}
+}
+
+// ───── EXPORT BERITA ACARA PER GANGGUAN ─────
+const printableItems = ref([]); // array of items for print
+const printAllMode   = ref(false);
+const showPrintPreview = ref(false);
+
+function exportPdfSingle(item) {
+  printAllMode.value   = false;
+  printableItems.value = [item];
+  showPrintPreview.value = true;
+}
+
+function exportPdfAll() {
+  if (!items.value || !items.value.length) return;
+  printAllMode.value   = true;
+  printableItems.value = items.value;
+  showPrintPreview.value = true;
+}
+
+function executePrint() {
+  window.print();
+}
+
+function exportExcelSingle(item) {
+  if (!item) return;
+  const d = item;
+  const s = baSettings.value;
+  const filename = `Berita_Acara_Gangguan_${d.ticket_number || 'Tiket'}.xls`;
+
+  const excelContent = `
+    <html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns="http://www.w3.org/TR/REC-html40">
+    <head>
+      <meta charset="utf-8">
+      <style>
+        table { border-collapse: collapse; font-family: Arial, sans-serif; font-size: 11px; width: 100%; }
+        th, td { border: 1px solid #000; padding: 6px; text-align: left; vertical-align: top; }
+        .header-title { font-weight: bold; font-size: 14px; text-align: center; background-color: #f1f5f9; }
+        .th-blue { background-color: #1d4ed8; color: #ffffff; font-weight: bold; text-align: center; }
+        .bg-total { background-color: #2563eb; color: #ffffff; font-weight: bold; }
+      </style>
+    </head>
+    <body>
+      <table>
+        <tr>
+          <td colspan="2"><b>Halaman:</b> 1</td>
+          <td colspan="4"><b>Departemen:</b> ${s.ba_departemen}</td>
+          <td colspan="7" class="header-title">${s.ba_brand_name}<br/>${s.ba_title}</td>
+        </tr>
+        <tr>
+          <td colspan="4"><b>Nomor Surat:</b> ${d.ticket_number || '-'}</td>
+          <td colspan="4"><b>Kubikal:</b> ${d.kategori || '-'}</td>
+          <td colspan="3"><b>Periode:</b> ${getYear(d.created_at)}</td>
+          <td colspan="2"><b>Bulan:</b> ${getMonthName(d.created_at)}</td>
+        </tr>
+        <tr>
+          <td colspan="4"><b>Nama Perangkat:</b> ${d.kategori || '-'}</td>
+          <td colspan="9"><b>Kode:</b> -</td>
+        </tr>
+        <tr><td colspan="13"></td></tr>
+        <tr class="th-blue">
+          <th>No</th>
+          <th>Hari/Tanggal</th>
+          <th>Start Downtime (h:mm:ss)</th>
+          <th>End Downtime (h:mm:ss)</th>
+          <th>Nama Agent</th>
+          <th>Ext / IP</th>
+          <th>ID Task SIP</th>
+          <th>Penyebab Permasalahan</th>
+          <th>Penyelesaian Masalah</th>
+          <th>Impact</th>
+          <th>Durasi Downtime</th>
+          <th>Petugas TS (Shift...)</th>
+          <th>Analisa</th>
+        </tr>
+        <tr>
+          <td style="text-align:center;">1</td>
+          <td>${formatDateFull(d.created_at)}</td>
+          <td>${formatTimeOnly(d.start_time || d.created_at)}</td>
+          <td>${formatTimeOnly(d.end_time || d.resolved_at)}</td>
+          <td>${d.jenis_gangguan === 'Massal' ? 'ALL AGENT' : (d.creator?.name || '-')}</td>
+          <td>-</td>
+          <td>${d.ticket_number || '-'}</td>
+          <td>${d.penyebab_permasalahan || d.deskripsi || '-'}</td>
+          <td>${d.penyelesaian_masalah || '-'}</td>
+          <td>${d.impact || '-'}</td>
+          <td>${calculateDurasi(d.start_time, d.end_time)}</td>
+          <td>${d.assignee?.name || '-'}</td>
+          <td>${d.analisa || '-'}</td>
+        </tr>
+        <tr class="bg-total">
+          <td colspan="10" style="text-align:right;">TOTAL DOWN TIME :</td>
+          <td colspan="3">${calculateDurasi(d.start_time, d.end_time)}</td>
+        </tr>
+        <tr><td colspan="13"></td></tr>
+        <tr>
+          <td colspan="7"></td>
+          <td colspan="6" style="text-align:center;">${s.ba_location}, ${formatDateFull(new Date())}<br/><br/>
+            <b>${s.ba_koord_title}</b> &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; <b>TEAM SUPPORT</b><br/><br/><br/><br/>
+            ${s.ba_koord_title}: [ ${s.ba_koord_name} ] &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; ${s.ba_ts_title}: [ ${d.assignee?.name || 'Petugas TS'} ]
+          </td>
+        </tr>
+      </table>
+    </body>
+    </html>
+  `;
+
+  const blob = new Blob([excelContent], { type: 'application/vnd.ms-excel;charset=utf-8' });
+  const link = document.createElement('a');
+  link.href = URL.createObjectURL(blob);
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+}
+
+function exportExcelAll() {
+  if (!items.value || !items.value.length) return;
+  
+  const s = baSettings.value;
+  const filename = `Berita_Acara_Semua_Gangguan_${new Date().toISOString().slice(0,10)}.xls`;
+  
+  let blocks = '';
+  items.value.forEach((d) => {
+    blocks += `
+      <table>
+        <tr>
+          <td colspan="2"><b>Halaman:</b> 1</td>
+          <td colspan="4"><b>Departemen:</b> ${s.ba_departemen}</td>
+          <td colspan="7" style="font-weight:bold; font-size:13px; text-align:center; background-color:#f1f5f9;">${s.ba_brand_name}<br/>${s.ba_title}</td>
+        </tr>
+        <tr>
+          <td colspan="4"><b>Nomor Surat:</b> ${d.ticket_number || '-'}</td>
+          <td colspan="4"><b>Kubikal:</b> ${d.kategori || '-'}</td>
+          <td colspan="3"><b>Periode:</b> ${getYear(d.created_at)}</td>
+          <td colspan="2"><b>Bulan:</b> ${getMonthName(d.created_at)}</td>
+        </tr>
+        <tr>
+          <td colspan="4"><b>Nama Perangkat:</b> ${d.kategori || '-'}</td>
+          <td colspan="9"><b>Kode:</b> -</td>
+        </tr>
+        <tr><td colspan="13"></td></tr>
+        <tr style="background-color:#1d4ed8; color:#ffffff; font-weight:bold; text-align:center;">
+          <th>No</th>
+          <th>Hari/Tanggal</th>
+          <th>Start Downtime (h:mm:ss)</th>
+          <th>End Downtime (h:mm:ss)</th>
+          <th>Nama Agent</th>
+          <th>Ext / IP</th>
+          <th>ID Task SIP</th>
+          <th>Penyebab Permasalahan</th>
+          <th>Penyelesaian Masalah</th>
+          <th>Impact</th>
+          <th>Durasi Downtime</th>
+          <th>Petugas TS (Shift...)</th>
+          <th>Analisa</th>
+        </tr>
+        <tr>
+          <td style="text-align:center;">1</td>
+          <td>${formatDateFull(d.created_at)}</td>
+          <td>${formatTimeOnly(d.start_time || d.created_at)}</td>
+          <td>${formatTimeOnly(d.end_time || d.resolved_at)}</td>
+          <td>${d.jenis_gangguan === 'Massal' ? 'ALL AGENT' : (d.creator?.name || '-')}</td>
+          <td>-</td>
+          <td>${d.ticket_number || '-'}</td>
+          <td>${d.penyebab_permasalahan || d.deskripsi || '-'}</td>
+          <td>${d.penyelesaian_masalah || '-'}</td>
+          <td>${d.impact || '-'}</td>
+          <td>${calculateDurasi(d.start_time, d.end_time)}</td>
+          <td>${d.assignee?.name || '-'}</td>
+          <td>${d.analisa || '-'}</td>
+        </tr>
+        <tr style="background-color:#2563eb; color:#ffffff; font-weight:bold;">
+          <td colspan="10" style="text-align:right;">TOTAL DOWN TIME :</td>
+          <td colspan="3">${calculateDurasi(d.start_time, d.end_time)}</td>
+        </tr>
+        <tr><td colspan="13"></td></tr>
+        <tr>
+          <td colspan="7"></td>
+          <td colspan="6" style="text-align:center;">${s.ba_location}, ${formatDateFull(new Date())}<br/><br/>
+            <b>${s.ba_koord_title}</b> &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; <b>TEAM SUPPORT</b><br/><br/><br/>
+            ${s.ba_koord_title}: [ ${s.ba_koord_name} ] &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; ${s.ba_ts_title}: [ ${d.assignee?.name || 'Petugas TS'} ]
+          </td>
+        </tr>
+      </table>
+      <br/><br/><hr/><br/><br/>
+    `;
+  });
+
+  const excelContent = `
+    <html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns="http://www.w3.org/TR/REC-html40">
+    <head>
+      <meta charset="utf-8">
+      <style>
+        table { border-collapse: collapse; font-family: Arial, sans-serif; font-size: 11px; width: 100%; margin-bottom: 30px; }
+        th, td { border: 1px solid #000; padding: 6px; text-align: left; vertical-align: top; }
+      </style>
+    </head>
+    <body>
+      ${blocks}
+    </body>
+    </html>
+  `;
+
+  const blob = new Blob([excelContent], { type: 'application/vnd.ms-excel;charset=utf-8' });
+  const link = document.createElement('a');
+  link.href = URL.createObjectURL(blob);
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+}
+
+onMounted(() => {
+  fetchBaSettings();
+  fetchGangguan();
+});
 </script>
 
 <template>
   <section class="grid" style="gap:16px;">
 
     <!-- Header -->
-    <div class="page-title-wrap" style="grid-column:1/-1; display:flex; justify-content:space-between; align-items:flex-end;">
+    <div class="page-title-wrap" style="grid-column:1/-1; display:flex; justify-content:space-between; align-items:flex-end; flex-wrap:wrap; gap:12px;">
       <div>
         <h2 class="page-title">Daftar Gangguan</h2>
         <p class="page-desc">Semua tiket gangguan yang masuk. Total: <strong>{{ total }}</strong> tiket</p>
-        <!-- Legend Status -->
         <div style="display:flex; align-items:center; gap:16px; margin-top:8px; font-size:0.75rem; font-weight:600; color:#64748b;">
           <span style="display:flex; align-items:center; gap:6px;"><span style="display:inline-block; width:8px; height:8px; border-radius:50%; background:#ef4444;"></span> Open</span>
           <span style="display:flex; align-items:center; gap:6px;"><span style="display:inline-block; width:8px; height:8px; border-radius:50%; background:#f59e0b;"></span> In Progress</span>
           <span style="display:flex; align-items:center; gap:6px;"><span style="display:inline-block; width:8px; height:8px; border-radius:50%; background:#10b981;"></span> Closed</span>
         </div>
+      </div>
+
+      <!-- Buttons Export Berita Acara Bulk -->
+      <div style="display:flex; gap:8px; flex-wrap:wrap;">
+        <button 
+          @click="exportPdfAll" 
+          style="display:inline-flex; align-items:center; gap:6px; background:linear-gradient(135deg, #1d4ed8, #2563eb); color:#fff; border:none; border-radius:8px; padding:8px 14px; font-weight:700; font-size:0.82rem; cursor:pointer; box-shadow:0 4px 10px rgba(37,99,235,0.25);"
+        >
+          📄 Export PDF Berita Acara (Semua)
+        </button>
+
+        <button 
+          @click="exportExcelAll" 
+          style="display:inline-flex; align-items:center; gap:6px; background:#16a34a; color:#fff; border:none; border-radius:8px; padding:8px 14px; font-weight:700; font-size:0.82rem; cursor:pointer; box-shadow:0 4px 10px rgba(22,163,74,0.25);"
+        >
+          📊 Export Excel Berita Acara (Semua)
+        </button>
       </div>
     </div>
 
@@ -189,6 +454,7 @@ onMounted(() => fetchGangguan());
 
       <button v-show="showFilters" v-if="search || filterStatus || filterPeriod || filterJenis" @click="search='';filterStatus='';filterPeriod='';filterStartDate='';filterEndDate='';filterJenis='';fetchGangguan(1)" class="reset-btn">✕ Reset</button>
     </div>
+
     <!-- Error -->
     <div v-if="error" class="alert alert-danger" style="grid-column:1/-1;">{{ error }}</div>
 
@@ -249,8 +515,10 @@ onMounted(() => fetchGangguan());
               <td class="td-base bold">{{ item.assignee?.name || '-' }}</td>
               <td class="td-ellipsis wide" :title="item.analisa">{{ item.analisa || '-' }}</td>
               <td class="sticky-aksi">
-                <div style="display:flex; justify-content:center; gap:6px;">
+                <div style="display:flex; justify-content:center; align-items:center; gap:5px;">
                   <RouterLink :to="`/gangguan/${item.id}`" class="btn-lihat">Lihat</RouterLink>
+                  <button @click="exportPdfSingle(item)" class="btn-pdf-action" title="Export PDF Berita Acara Tiket Ini">📄 PDF</button>
+                  <button @click="exportExcelSingle(item)" class="btn-excel-action" title="Export Excel Berita Acara Tiket Ini">📊 Excel</button>
                   <button v-if="auth.hasRole('Admin') || auth.hasRole('TS')" @click="promptDelete(item)" class="btn-hapus">Hapus</button>
                 </div>
               </td>
@@ -292,93 +560,176 @@ onMounted(() => fetchGangguan());
         </div>
       </div>
     </div>
+
+    <!-- ── PREVIEW & PRINTABLE BERITA ACARA TEMPLATE ── -->
+    <!-- Modal Preview (Visible on Screen when showPrintPreview is true) -->
+    <div v-if="showPrintPreview" class="print-preview-overlay">
+      <div class="print-preview-modal">
+        <div class="print-preview-header">
+          <h3 style="margin: 0; font-size: 1.2rem; color: #1e293b;">Preview Berita Acara</h3>
+          <button @click="showPrintPreview = false" style="background: none; border: none; font-size: 1.5rem; cursor: pointer; color: #64748b;">&times;</button>
+        </div>
+        
+        <div class="print-preview-body">
+          <div class="printable-berita-acara-wrapper">
+            <div v-for="(printableItem, pIdx) in printableItems" :key="printableItem.id || pIdx" class="printable-berita-acara-page">
+              
+              <!-- KOP Table - 4 Kolom -->
+              <table class="ba-kop-table">
+                <tr>
+                  <td class="ba-kop-left">
+                    <table style="width:100%;border-collapse:collapse;font-size:7.5pt;">
+                      <tr><td style="border-right:1px solid #000;padding:2px 6px;white-space:nowrap;"><strong>Halaman</strong></td><td style="padding:2px 6px;">: 1</td></tr>
+                      <tr><td style="border-right:1px solid #000;padding:2px 6px;white-space:nowrap;"><strong>Tanggal Berlaku</strong></td><td style="padding:2px 6px;">: {{ formatDateOnly(printableItem.created_at) }}</td></tr>
+                      <tr><td style="border-right:1px solid #000;padding:2px 6px;white-space:nowrap;"><strong>Departemen</strong></td><td style="padding:2px 6px;">:</td></tr>
+                    </table>
+                  </td>
+                  <td class="ba-kop-dept">{{ baSettings.ba_departemen }}</td>
+                  <td class="ba-kop-title">
+                    <div style="font-size:9pt;font-weight:800;">{{ baSettings.ba_brand_name }}</div>
+                    <div style="font-size:8.5pt;font-weight:900;margin-top:3px;">{{ baSettings.ba_title }}</div>
+                  </td>
+                  <td class="ba-kop-logo">
+                    <img v-if="baSettings.ba_logo_url" :src="baSettings.ba_logo_url" style="max-height:52px;max-width:110px;object-fit:contain;" />
+                    <div v-else style="display:inline-flex;align-items:center;gap:3px;border:1.5px solid #003;padding:3px 6px;border-radius:3px;">
+                      <span style="color:#d97706;font-weight:900;font-size:13pt;">⚡ PLN</span>
+                      <span style="color:#0284c7;font-weight:800;font-size:9pt;">Icon Plus</span>
+                    </div>
+                  </td>
+                </tr>
+              </table>
+
+              <!-- Sub Header -->
+              <table class="ba-info-table">
+                <tr>
+                  <td style="width:33%;"><strong>Nomor Surat</strong> : {{ printableItem.ticket_number }}</td>
+                  <td style="width:33%;"><strong>Nama Perangkat</strong> : {{ printableItem.kategori || '-' }}</td>
+                  <td style="width:34%;"><strong>Kode</strong> : -</td>
+                </tr>
+              </table>
+              <!-- Nomor / Periode / Bulan Row -->
+              <div class="ba-info-row">
+                <span style="margin-right:30px;"><strong>Nomor :</strong> -</span>
+                <span style="margin-right:30px;"><strong>Periode : {{ getYear(printableItem.created_at) }}</strong></span>
+                <span><strong>Bulan : {{ getMonthName(printableItem.created_at) }}</strong></span>
+              </div>
+
+              <!-- Table Utama Kronologi -->
+              <table class="ba-main-table">
+                <thead>
+                  <tr>
+                    <th style="width:3%;">No</th>
+                    <th style="width:8%;">Hari/Tanggal</th>
+                    <th style="width:7%;">Start Downtime<br/><span style="font-weight:normal;font-size:7pt;">(h:mm:ss)</span></th>
+                    <th style="width:7%;">End Downtime<br/><span style="font-weight:normal;font-size:7pt;">(h:mm:ss)</span></th>
+                    <th style="width:9%;">Nama Agent</th>
+                    <th style="width:5%;">Ext / IP</th>
+                    <th style="width:8%;">ID Task SIP</th>
+                    <th style="width:13%;">Penyebab Permasalahan</th>
+                    <th style="width:13%;">Penyelesaian Masalah</th>
+                    <th style="width:8%;">Impact</th>
+                    <th style="width:7%;">Durasi Downtime</th>
+                    <th style="width:7%;">Petugas TS Shift ...</th>
+                    <th style="width:5%;">Analisa</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr class="ba-data-row">
+                    <td style="text-align: center;">1</td>
+                    <td>{{ formatDateFull(printableItem.created_at) }}</td>
+                    <td style="text-align: center;">{{ formatTimeOnly(printableItem.start_time || printableItem.created_at) }}</td>
+                    <td style="text-align: center;">{{ formatTimeOnly(printableItem.end_time || printableItem.resolved_at) }}</td>
+                    <td>{{ printableItem.jenis_gangguan === 'Massal' ? 'ALL AGENT' : (printableItem.creator?.name || '-') }}</td>
+                    <td style="text-align: center;">-</td>
+                    <td>{{ printableItem.ticket_number }}</td>
+                    <td>{{ printableItem.penyebab_permasalahan || printableItem.deskripsi || '-' }}</td>
+                    <td>{{ printableItem.penyelesaian_masalah || '-' }}</td>
+                    <td>{{ printableItem.impact || '-' }}</td>
+                    <td style="text-align: center;">{{ calculateDurasi(printableItem.start_time, printableItem.end_time) }}</td>
+                    <td>{{ printableItem.assignee?.name || '-' }}</td>
+                    <td>{{ printableItem.analisa || '-' }}</td>
+                  </tr>
+                  <tr class="ba-total-row">
+                    <td colspan="10" style="text-align:right;font-weight:bold;">TOTAL DOWN TIME :</td>
+                    <td colspan="3" style="font-weight:bold;text-align:center;">{{ calculateDurasi(printableItem.start_time, printableItem.end_time) }}</td>
+                  </tr>
+                </tbody>
+              </table>
+
+              <!-- Signature Box -->
+              <div class="ba-signature-box">
+                <table style="width:100%;border:none;margin-bottom:8px;">
+                  <tr>
+                    <td style="width:50%;border:none;"></td>
+                    <td style="width:25%;text-align:center;border:none;font-size:8pt;font-weight:600;">{{ baSettings.ba_location }}, {{ formatDateFull(new Date()) }}</td>
+                    <td style="width:25%;border:none;"></td>
+                  </tr>
+                </table>
+                <div style="display:flex;justify-content:flex-end;gap:80px;text-align:center;">
+                  <div style="min-width:180px;display:flex;flex-direction:column;align-items:center;">
+                    <div style="font-size:8pt;font-weight:700;color:#c2410c;margin-bottom:6px;">KOORD OPS</div>
+                    <div style="height:60px;display:flex;align-items:center;justify-content:center;margin-bottom:6px;">
+                      <img v-if="baSettings.ba_koord_signature_url" :src="baSettings.ba_koord_signature_url" style="max-height:55px;max-width:150px;object-fit:contain;" />
+                    </div>
+                    <div style="font-size:7.5pt;font-weight:800;margin-bottom:2px;">KOORDINATOR</div>
+                    <div style="font-size:7.5pt;">[ {{ baSettings.ba_koord_name }} ]</div>
+                  </div>
+                  <div style="min-width:180px;display:flex;flex-direction:column;align-items:center;">
+                    <div style="font-size:8pt;font-weight:700;color:#c2410c;margin-bottom:6px;">TEAM SUPPORT</div>
+                    <div style="height:60px;display:flex;align-items:center;justify-content:center;margin-bottom:6px;">
+                      <img v-if="printableItem.assignee?.signature_url" :src="printableItem.assignee.signature_url" style="max-height:55px;max-width:150px;object-fit:contain;" />
+                    </div>
+                    <div style="font-size:7.5pt;font-weight:800;margin-bottom:2px;">TECHNICAL SUPPORT</div>
+                    <div style="font-size:7.5pt;">[ {{ printableItem.assignee?.name || '' }} ]</div>
+                  </div>
+                </div>
+              </div>
+
+
+
+            </div>
+          </div>
+        </div>
+
+        <div class="print-preview-footer">
+          <button @click="showPrintPreview = false" style="padding: 8px 16px; background: #fff; border: 1px solid #cbd5e1; border-radius: 6px; cursor: pointer; font-weight: 600;">Batal</button>
+          <button @click="executePrint" style="padding: 8px 16px; background: #1d4ed8; color: #fff; border: none; border-radius: 6px; cursor: pointer; font-weight: 600;">🖨️ Cetak PDF</button>
+        </div>
+      </div>
+    </div>
+
   </section>
 </template>
 
 <style scoped>
 .modal-overlay {
-  position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background: rgba(0,0,0,0.5);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 9999;
+  position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+  background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; z-index: 9999;
 }
 .modal-content {
-  background: #fff;
-  padding: 24px;
-  border-radius: 12px;
-  width: 90%;
-  max-width: 400px;
-  box-shadow: 0 20px 25px -5px rgba(0,0,0,0.1), 0 10px 10px -5px rgba(0,0,0,0.04);
+  background: #fff; padding: 24px; border-radius: 12px; width: 90%; max-width: 400px;
+  box-shadow: 0 20px 25px -5px rgba(0,0,0,0.1);
 }
-.filter-toolbar {
-  grid-column: 1 / -1;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-.search-box {
-  position: relative;
-  width: 100%;
-}
+.filter-toolbar { grid-column: 1 / -1; display: flex; flex-direction: column; gap: 10px; }
+.search-box { position: relative; width: 100%; }
 .search-box input {
-  width: 100%;
-  padding: 10px 80px 10px 38px;
-  border: 1.5px solid #e2e8f0;
-  border-radius: 10px;
-  font-size: 0.88rem;
-  outline: none;
-  background: #fff;
-  box-sizing: border-box;
-  margin: 0;
-  height: 42px;
+  width: 100%; padding: 10px 80px 10px 38px; border: 1.5px solid #e2e8f0; border-radius: 10px;
+  font-size: 0.88rem; outline: none; background: #fff; box-sizing: border-box; margin: 0; height: 42px;
 }
-.search-icon {
-  position: absolute; left: 12px; top: 50%; transform: translateY(-50%); color: #94a3b8; font-size: 0.9rem;
-}
+.search-icon { position: absolute; left: 12px; top: 50%; transform: translateY(-50%); color: #94a3b8; font-size: 0.9rem; }
 .search-btn {
   position: absolute; right: 6px; top: 50%; transform: translateY(-50%);
-  background: #2563eb; color: #fff; border: none; border-radius: 7px;
-  padding: 5px 14px; font-size: 0.78rem; cursor: pointer; font-weight: 600;
+  background: #2563eb; color: #fff; border: none; border-radius: 7px; padding: 5px 14px; font-size: 0.78rem; cursor: pointer; font-weight: 600;
 }
-.filter-controls {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 8px;
-  width: 100%;
-}
+.filter-controls { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; width: 100%; }
 .filter-select {
-  padding: 8px 10px;
-  border: 1.5px solid #e2e8f0;
-  border-radius: 8px;
-  font-size: 0.83rem;
-  background: #fff;
-  cursor: pointer;
-  color: #334155;
-  width: 100%;
-  margin: 0;
-  height: 36px;
+  padding: 8px 10px; border: 1.5px solid #e2e8f0; border-radius: 8px; font-size: 0.83rem; background: #fff; cursor: pointer; color: #334155; width: 100%; margin: 0; height: 36px;
 }
-.custom-date-filter {
-  display: flex; gap: 8px; align-items: center; width: 100%;
-}
-.filter-input-date {
-  flex: 1; padding: 7px 10px; border: 1.5px solid #e2e8f0; border-radius: 8px; font-size: 0.83rem; outline: none; margin: 0; width: 100%;
-}
-.reset-btn {
-  padding: 7px 14px; border: 1.5px solid #e2e8f0; border-radius: 8px; font-size: 0.8rem;
-  background: #fff; cursor: pointer; color: #64748b; font-weight: 600;
-}
+.custom-date-filter { display: flex; gap: 8px; align-items: center; width: 100%; }
+.filter-input-date { flex: 1; padding: 7px 10px; border: 1.5px solid #e2e8f0; border-radius: 8px; font-size: 0.83rem; outline: none; margin: 0; width: 100%; }
+.reset-btn { padding: 7px 14px; border: 1.5px solid #e2e8f0; border-radius: 8px; font-size: 0.8rem; background: #fff; cursor: pointer; color: #64748b; font-weight: 600; }
 .mobile-filter-btn {
-  display: flex; gap: 6px; align-items: center; justify-content: center;
-  padding: 8px 16px; border: 1.5px solid #e2e8f0; border-radius: 8px;
-  font-size: 0.85rem; font-weight: 600; background: #fff; cursor: pointer; color: #334155;
-  width: 100%;
+  display: flex; gap: 6px; align-items: center; justify-content: center; padding: 8px 16px; border: 1.5px solid #e2e8f0; border-radius: 8px; font-size: 0.85rem; font-weight: 600; background: #fff; cursor: pointer; color: #334155; width: 100%;
 }
 
 @media (min-width: 769px) {
@@ -391,45 +742,24 @@ onMounted(() => fetchGangguan());
   .mobile-filter-btn { display: none; width: auto; }
 }
 
-/* Sort header */
-.th-base {
-  padding: 12px 16px; font-weight: 600; color: #475569;
-  text-transform: uppercase; font-size: 0.72rem; letter-spacing: 0.05em;
-}
-.th-sort {
-  padding: 12px 16px; font-weight: 600; color: #475569;
-  text-transform: uppercase; font-size: 0.72rem; letter-spacing: 0.05em;
-  cursor: pointer; user-select: none; white-space: nowrap;
-}
+.th-base { padding: 12px 16px; font-weight: 600; color: #475569; text-transform: uppercase; font-size: 0.72rem; letter-spacing: 0.05em; }
+.th-sort { padding: 12px 16px; font-weight: 600; color: #475569; text-transform: uppercase; font-size: 0.72rem; letter-spacing: 0.05em; cursor: pointer; user-select: none; white-space: nowrap; }
 .th-sort:hover { background: #f1f5f9; }
-.th-sticky {
-  position: sticky; right: 0; background-color: #f8fafc;
-  padding: 12px 16px; text-align: center; font-weight: 600; color: #475569;
-  text-transform: uppercase; font-size: 0.72rem; letter-spacing: 0.05em;
-  z-index: 2; box-shadow: -4px 0 12px rgba(0,0,0,0.04);
-}
+.th-sticky { position: sticky; right: 0; background-color: #f8fafc; padding: 12px 16px; text-align: center; font-weight: 600; color: #475569; text-transform: uppercase; font-size: 0.72rem; letter-spacing: 0.05em; z-index: 2; box-shadow: -4px 0 12px rgba(0,0,0,0.04); }
 .sort-icon { font-size: 0.8rem; opacity: 0.5; margin-left: 3px; }
 
-/* Body cells */
-.td-base    { padding: 12px 16px; color: #334155; }
-.td-center  { padding: 12px 16px; text-align: center; color: #475569; }
+.td-base { padding: 12px 16px; color: #334155; }
+.td-center { padding: 12px 16px; text-align: center; color: #475569; }
 .td-ellipsis { padding: 12px 16px; color: #475569; min-width: 200px; max-width: 400px; white-space: normal; overflow-wrap: break-word; line-height: 1.5; }
 .td-ellipsis.wide { max-width: 500px; }
-.bold  { font-weight: 600 !important; color: #334155 !important; }
+.bold { font-weight: 600 !important; color: #334155 !important; }
 .muted { color: #94a3b8 !important; }
 
 table { border: 1px solid #cbd5e1; }
-.th-base, .th-sort, .th-sticky {
-  background-color: #f1f5f9;
-  border-bottom: 2px solid #cbd5e1 !important;
-  border-right: 1px solid #e2e8f0;
-}
+.th-base, .th-sort, .th-sticky { background-color: #f1f5f9; border-bottom: 2px solid #cbd5e1 !important; border-right: 1px solid #e2e8f0; }
 .th-sticky { border-right: none; }
 
-.td-base, .td-center, .td-ellipsis, .sticky-aksi {
-  border-bottom: 1px solid #e2e8f0 !important;
-  border-right: 1px solid #f1f5f9;
-}
+.td-base, .td-center, .td-ellipsis, .sticky-aksi { border-bottom: 1px solid #e2e8f0 !important; border-right: 1px solid #f1f5f9; }
 .sticky-aksi { border-right: none; }
 
 .table-row-hover { background: #ffffff; transition: background 0.15s; }
@@ -439,22 +769,25 @@ table { border: 1px solid #cbd5e1; }
 .table-row-hover:nth-child(even) .sticky-aksi { background: #fcfcfc; }
 .table-row-hover:hover .sticky-aksi { background: #f1f5f9 !important; }
 
-.sticky-aksi {
-  position: sticky; right: 0; padding: 10px 16px;
-  text-align: center; z-index: 1; box-shadow: -4px 0 12px rgba(0,0,0,0.05);
-}
+.sticky-aksi { position: sticky; right: 0; padding: 10px 16px; text-align: center; z-index: 1; box-shadow: -4px 0 12px rgba(0,0,0,0.05); }
 
 .btn-lihat {
-  display: inline-block; padding: 5px 14px;
-  background: #eff6ff; color: #2563eb; font-weight: 600;
-  font-size: 0.75rem; border-radius: 999px; text-decoration: none; transition: background 0.15s;
+  display: inline-block; padding: 4px 10px; background: #eff6ff; color: #2563eb; font-weight: 600; font-size: 0.75rem; border-radius: 999px; text-decoration: none; transition: background 0.15s;
 }
 .btn-lihat:hover { background: #dbeafe; }
 
+.btn-pdf-action {
+  padding: 4px 10px; border: 1px solid #93c5fd; background: #eff6ff; color: #1d4ed8; font-weight: 700; font-size: 0.72rem; border-radius: 999px; cursor: pointer; transition: background 0.15s;
+}
+.btn-pdf-action:hover { background: #dbeafe; }
+
+.btn-excel-action {
+  padding: 4px 10px; border: 1px solid #86efac; background: #f0fdf4; color: #15803d; font-weight: 700; font-size: 0.72rem; border-radius: 999px; cursor: pointer; transition: background 0.15s;
+}
+.btn-excel-action:hover { background: #dcfce7; }
+
 .btn-hapus {
-  display: inline-block; padding: 5px 14px; border: none; cursor: pointer;
-  background: #fef2f2; color: #dc2626; font-weight: 600;
-  font-size: 0.75rem; border-radius: 999px; text-decoration: none; transition: background 0.15s;
+  display: inline-block; padding: 4px 10px; border: none; cursor: pointer; background: #fef2f2; color: #dc2626; font-weight: 600; font-size: 0.75rem; border-radius: 999px; text-decoration: none; transition: background 0.15s;
 }
 .btn-hapus:hover { background: #fee2e2; }
 
@@ -463,31 +796,74 @@ table { border: 1px solid #cbd5e1; }
 .elegant-scroll::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
 .elegant-scroll::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
 
-/* Pagination */
-.pagination-wrap {
-  display: flex; justify-content: space-between; align-items: center; padding: 12px 20px; border-top: 1px solid #f1f5f9; background: #fff; flex-wrap: wrap; gap: 12px;
-}
+.pagination-wrap { display: flex; justify-content: space-between; align-items: center; padding: 12px 20px; border-top: 1px solid #f1f5f9; background: #fff; flex-wrap: wrap; gap: 12px; }
 .pagination-info { font-size: 0.8rem; color: #64748b; }
 .pagination-buttons { display: flex; gap: 4px; align-items: center; }
 
-@media (max-width: 768px) {
-  .pagination-wrap {
-    flex-direction: column; justify-content: center; text-align: center; padding: 14px 12px;
-  }
-  .th-base, .th-sort, .th-sticky, .td-base, .td-center, .td-ellipsis, .sticky-aksi {
-    padding-left: 8px !important;
-    padding-right: 8px !important;
-    padding-top: 10px !important;
-    padding-bottom: 10px !important;
-    font-size: 0.8rem !important;
-  }
-}
-
-.pg-btn {
-  padding: 5px 10px; border: 1px solid #e2e8f0; border-radius: 6px;
-  background: #fff; color: #334155; font-size: 0.82rem; cursor: pointer; transition: all 0.15s; min-width: 32px;
-}
+.pg-btn { padding: 5px 10px; border: 1px solid #e2e8f0; border-radius: 6px; background: #fff; color: #334155; font-size: 0.82rem; cursor: pointer; transition: all 0.15s; min-width: 32px; }
 .pg-btn:hover:not(:disabled) { background: #eff6ff; border-color: #93c5fd; color: #2563eb; }
 .pg-btn:disabled { opacity: 0.4; cursor: default; }
 .pg-active { background: #2563eb !important; color: #fff !important; border-color: #2563eb !important; }
+
+/* Preview Modal CSS */
+.print-preview-overlay {
+  position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+  background: rgba(15, 23, 42, 0.7); backdrop-filter: blur(4px);
+  z-index: 9999; display: flex; align-items: center; justify-content: center;
+}
+.print-preview-modal {
+  background: #fff; width: 95%; max-width: 1000px; border-radius: 12px;
+  box-shadow: 0 20px 25px -5px rgba(0,0,0,0.1); display: flex; flex-direction: column;
+  max-height: 90vh;
+}
+.print-preview-header {
+  padding: 16px 20px; border-bottom: 1px solid #e2e8f0; display: flex;
+  justify-content: space-between; align-items: center;
+}
+.print-preview-body {
+  padding: 20px; background: #e2e8f0; overflow-y: auto; flex: 1;
+}
+.print-preview-footer {
+  padding: 16px 20px; border-top: 1px solid #e2e8f0; display: flex;
+  justify-content: flex-end; gap: 12px; background: #fff; border-bottom-left-radius: 12px; border-bottom-right-radius: 12px;
+}
+.printable-berita-acara-wrapper {
+  background: #fff; padding: 30px; box-shadow: 0 4px 6px rgba(0,0,0,0.05); margin: 0 auto;
+  color: #000; font-family: Arial, sans-serif; font-size: 8pt; width: 297mm; max-width: 100%; box-sizing: border-box; overflow-x: auto;
+}
+.ba-kop-table { width: 100%; border-collapse: collapse; margin-bottom: 0; border: 1px solid #000; }
+.ba-kop-table td { border: 1px solid #000; padding: 4px 6px; vertical-align: middle; }
+.ba-kop-left  { width: 16%; padding: 0 !important; vertical-align: top !important; }
+.ba-kop-dept  { width: 20%; text-align: center; font-weight: 700; font-size: 8.5pt; }
+.ba-kop-title { width: 46%; text-align: center; font-weight: 800; }
+.ba-kop-logo  { width: 18%; text-align: center; }
+.ba-info-table { width: 100%; border-collapse: collapse; margin-bottom: 2px; font-size: 7.5pt; border: 1px solid #000; border-top: none; }
+.ba-info-table td { border: 1px solid #000; padding: 3px 6px; }
+.ba-info-row { display: flex; justify-content: flex-end; align-items: center; font-size: 7.5pt; padding: 3px 6px; margin-bottom: 6px; }
+.ba-main-table { width: 100%; border-collapse: collapse; font-size: 7.5pt; margin-bottom: 12px; }
+.ba-main-table th { background-color: #1d4ed8 !important; color: #ffffff !important; border: 1px solid #000 !important; padding: 6px 4px; font-weight: bold; text-align: center; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+.ba-main-table td { border: 1px solid #000 !important; padding: 6px 4px; vertical-align: top; }
+.ba-data-row td { min-height: 60px; height: 60px; }
+.ba-total-row td { background-color: #2563eb !important; color: #ffffff !important; font-weight: bold; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+.ba-signature-box { margin-top: 14px; margin-bottom: 16px; page-break-inside: avoid; }
+.ba-evidence-container { margin-top: 14px; border: 1px solid #000; page-break-inside: avoid; }
+.ba-evidence-title { background-color: #1d4ed8 !important; color: #ffffff !important; font-weight: bold; text-align: center; padding: 4px; font-size: 8.5pt; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+.ba-evidence-grid { display: flex; flex-wrap: wrap; gap: 8px; padding: 8px; justify-content: center; }
+.ba-evidence-item img { max-height: 220px; max-width: 100%; object-fit: contain; border: 1px solid #ccc; }
+.ba-evidence-empty { padding: 30px; text-align: center; color: #64748b; font-style: italic; }
+</style>
+
+<style>
+/* UNSCOPED PRINT STYLES - Fixes the issue where other elements weren't hidden */
+@media print {
+  body * { visibility: hidden !important; }
+  .printable-berita-acara-wrapper, .printable-berita-acara-wrapper * { visibility: visible !important; }
+  .printable-berita-acara-wrapper {
+    display: block !important; position: absolute; left: 0; top: 0; width: 100%; margin: 0; padding: 0; box-shadow: none;
+    color: #000; font-family: Arial, sans-serif; font-size: 8pt; background: #fff;
+  }
+  .printable-berita-acara-page { page-break-after: always; margin-bottom: 20px; }
+  .printable-berita-acara-page:last-child { page-break-after: auto; }
+  @page { size: A4 landscape; margin: 8mm; }
+}
 </style>
