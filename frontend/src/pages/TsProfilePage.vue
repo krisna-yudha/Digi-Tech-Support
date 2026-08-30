@@ -494,8 +494,6 @@ onMounted(() => {
               <td style="padding: 12px 16px; text-align: center;">
                 <div style="display: flex; gap: 6px; justify-content: center;">
                   <RouterLink :to="`/gangguan/${item.id}`" class="btn-lihat">Lihat</RouterLink>
-                  <button @click="exportPdfSingle(item)" class="btn-pdf-action" title="Cetak PDF Berita Acara">📄 PDF</button>
-                  <button @click="exportExcelSingle(item)" class="btn-excel-action" title="Export Excel Berita Acara">📊 Excel</button>
                 </div>
               </td>
             </tr>
@@ -523,36 +521,42 @@ onMounted(() => {
               
               <!-- KOP Table - 4 Kolom -->
               <table class="ba-kop-table">
-                <tr>
-                  <td class="ba-kop-left">
-                    <table style="width:100%;border-collapse:collapse;font-size:7.5pt;">
-                      <tr><td style="border-right:1px solid #000;padding:2px 6px;white-space:nowrap;"><strong>Halaman</strong></td><td style="padding:2px 6px;">: 1</td></tr>
-                      <tr><td style="border-right:1px solid #000;padding:2px 6px;white-space:nowrap;"><strong>Tanggal Berlaku</strong></td><td style="padding:2px 6px;">: {{ formatDateOnly(printableItem.created_at) }}</td></tr>
-                      <tr><td style="border-right:1px solid #000;padding:2px 6px;white-space:nowrap;"><strong>Departemen</strong></td><td style="padding:2px 6px;">:</td></tr>
-                    </table>
-                  </td>
-                  <td class="ba-kop-dept">{{ baSettings.ba_departemen }}</td>
-                  <td class="ba-kop-title">
-                    <div style="font-size:9pt;font-weight:800;">{{ baSettings.ba_brand_name }}</div>
-                    <div style="font-size:8.5pt;font-weight:900;margin-top:3px;">{{ baSettings.ba_title }}</div>
-                  </td>
-                  <td class="ba-kop-logo">
-                    <img v-if="baSettings.ba_logo_url" :src="baSettings.ba_logo_url" style="max-height:52px;max-width:110px;object-fit:contain;" />
-                    <div v-else style="display:inline-flex;align-items:center;gap:3px;border:1.5px solid #003;padding:3px 6px;border-radius:3px;">
-                      <span style="color:#d97706;font-weight:900;font-size:13pt;">⚡ PLN</span>
-                      <span style="color:#0284c7;font-weight:800;font-size:9pt;">Icon Plus</span>
-                    </div>
-                  </td>
-                </tr>
+                <tbody>
+                  <tr>
+                    <td class="ba-kop-left">
+                      <table style="width:100%;border-collapse:collapse;font-size:7.5pt;">
+                        <tbody>
+                          <tr><td style="border-right:1px solid #000;padding:2px 6px;white-space:nowrap;"><strong>Halaman</strong></td><td style="padding:2px 6px;">: 1</td></tr>
+                          <tr><td style="border-right:1px solid #000;padding:2px 6px;white-space:nowrap;"><strong>Tanggal Berlaku</strong></td><td style="padding:2px 6px;">: {{ formatDateOnly(printableItem.created_at) }}</td></tr>
+                          <tr><td style="border-right:1px solid #000;padding:2px 6px;white-space:nowrap;"><strong>Departemen</strong></td><td style="padding:2px 6px;">:</td></tr>
+                        </tbody>
+                      </table>
+                    </td>
+                    <td class="ba-kop-dept">{{ baSettings.ba_departemen }}</td>
+                    <td class="ba-kop-title">
+                      <div style="font-size:9pt;font-weight:800;">{{ baSettings.ba_brand_name }}</div>
+                      <div style="font-size:8.5pt;font-weight:900;margin-top:3px;">{{ baSettings.ba_title }}</div>
+                    </td>
+                    <td class="ba-kop-logo">
+                      <img v-if="baSettings.ba_logo_url" :src="baSettings.ba_logo_url" style="max-height:52px;max-width:110px;object-fit:contain;" />
+                      <div v-else style="display:inline-flex;align-items:center;gap:3px;border:1.5px solid #003;padding:3px 6px;border-radius:3px;">
+                        <span style="color:#d97706;font-weight:900;font-size:13pt;">⚡ PLN</span>
+                        <span style="color:#0284c7;font-weight:800;font-size:9pt;">Icon Plus</span>
+                      </div>
+                    </td>
+                  </tr>
+                </tbody>
               </table>
 
               <!-- Sub Header -->
               <table class="ba-info-table">
-                <tr>
-                  <td style="width:33%;"><strong>Nomor Surat</strong> : {{ printableItem.ticket_number }}</td>
-                  <td style="width:33%;"><strong>Nama Perangkat</strong> : {{ printableItem.kategori || '-' }}</td>
-                  <td style="width:34%;"><strong>Kode</strong> : -</td>
-                </tr>
+                <tbody>
+                  <tr>
+                    <td style="width:33%;"><strong>Nomor Surat</strong> : {{ printableItem.ticket_number }}</td>
+                    <td style="width:33%;"><strong>Nama Perangkat</strong> : {{ printableItem.kategori || '-' }}</td>
+                    <td style="width:34%;"><strong>Kode</strong> : -</td>
+                  </tr>
+                </tbody>
               </table>
               <!-- Nomor / Periode / Bulan Row -->
               <div class="ba-info-row">
@@ -606,11 +610,13 @@ onMounted(() => {
               <!-- Signature Box -->
               <div class="ba-signature-box">
                 <table style="width:100%;border:none;margin-bottom:8px;">
-                  <tr>
-                    <td style="width:50%;border:none;"></td>
-                    <td style="width:25%;text-align:center;border:none;font-size:8pt;font-weight:600;">{{ baSettings.ba_location }}, {{ formatDateFull(new Date()) }}</td>
-                    <td style="width:25%;border:none;"></td>
-                  </tr>
+                  <tbody>
+                    <tr>
+                      <td style="width:50%;border:none;"></td>
+                      <td style="width:25%;text-align:center;border:none;font-size:8pt;font-weight:600;">{{ baSettings.ba_location }}, {{ formatDateFull(new Date()) }}</td>
+                      <td style="width:25%;border:none;"></td>
+                    </tr>
+                  </tbody>
                 </table>
                 <div style="display:flex;justify-content:flex-end;gap:80px;text-align:center;">
                   <!-- Koordinator -->

@@ -4,21 +4,23 @@ import { useRouter } from 'vue-router';
 import { useAuthStore } from '../stores/auth';
 import api from '../services/api';
 
-const router = useRouter();
-const auth   = useAuthStore();
+const router  = useRouter();
+const auth    = useAuthStore();
 const loading = ref(false);
 const error   = ref('');
 
-const form = reactive({ email: '', password: '' });
+const form = reactive({ email: '', password: '', remember: false });
 
 async function submit() {
   loading.value = true;
   error.value   = '';
   try {
-    const { data } = await api.post('/login', form);
-    auth.setAuth(data);
-    if (data.user.roles?.includes('Agent')) { router.push({ name: 'agent-dashboard' }); return; }
-    if (data.user.roles?.includes('TS'))    { router.push({ name: 'gangguan-list'   }); return; }
+    const { data } = await api.post('/login', { email: form.email, password: form.password });
+    auth.setAuth(data, form.remember);
+    const roles = data.user.roles || [];
+    const roleNames = roles.map(r => typeof r === 'object' ? r.name : r);
+    if (roleNames.includes('Agent')) { router.push({ name: 'agent-dashboard' }); return; }
+    if (roleNames.includes('TS'))    { router.push({ name: 'gangguan-list'   }); return; }
     router.push({ name: 'dashboard' });
   } catch (err) {
     error.value = err.response?.data?.message || 'Login gagal. Periksa email dan password Anda.';
@@ -50,6 +52,19 @@ async function submit() {
         <div>
           <label for="password">Password</label>
           <input id="password" v-model="form.password" type="password" placeholder="••••••••" required autocomplete="current-password">
+        </div>
+
+        <!-- Ingat Saya -->
+        <div style="display:flex;align-items:center;gap:8px;">
+          <input
+            id="remember"
+            v-model="form.remember"
+            type="checkbox"
+            style="width:16px;height:16px;accent-color:var(--primary);cursor:pointer;"
+          />
+          <label for="remember" style="margin:0;font-size:0.85rem;font-weight:500;color:var(--text-main);cursor:pointer;user-select:none;">
+            Ingat Saya <span style="color:var(--muted);font-weight:400;">(sesi tersimpan 24 jam)</span>
+          </label>
         </div>
 
         <div v-if="error" class="alert alert-danger">{{ error }}</div>

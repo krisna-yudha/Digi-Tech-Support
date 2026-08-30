@@ -235,6 +235,7 @@ async function fetchBaSettings() {
 
 // ───── Export PDF & Excel Berita Acara ─────
 const showPrintPreview = ref(false);
+const cubicleList = ref([]);
 const baForm = ref({
   nomorSurat: '',
   namaPerangkat: '',
@@ -244,12 +245,34 @@ const baForm = ref({
   idTaskSip: ''
 });
 
+async function fetchCubicles() {
+  try {
+    const { data } = await api.get('/cubicles');
+    cubicleList.value = Array.isArray(data) ? data : (data.data || []);
+  } catch (err) {
+    console.error('Failed to load cubicles:', err);
+  }
+}
+
+function onCubicleChange() {
+  const selected = cubicleList.value.find(c => c.nama === baForm.value.kubikal);
+  if (selected) {
+    const ext = selected.ext || '';
+    const ip = selected.ip || '';
+    if (ext || ip) {
+      baForm.value.extIp = [ext, ip].filter(Boolean).join(' / ');
+    } else {
+      baForm.value.extIp = '';
+    }
+  }
+}
+
 function printBeritaAcara() {
   if (item.value) {
     baForm.value.nomorSurat = item.value.nomor_surat || '';
     baForm.value.namaPerangkat = item.value.kategori || '';
     baForm.value.kode = item.value.kode || '';
-    baForm.value.kubikal = item.value.cubicle_name || '';
+    baForm.value.kubikal = item.value.cubicle_name || item.value.kategori || '';
     baForm.value.idTaskSip = item.value.id_task_sip || '';
 
     const ext = item.value.cubicle_ext || '';
@@ -257,7 +280,12 @@ function printBeritaAcara() {
     if (ext || ip) {
       baForm.value.extIp = [ext, ip].filter(Boolean).join(' / ');
     } else {
-      baForm.value.extIp = '';
+      const found = cubicleList.value.find(c => c.nama === baForm.value.kubikal);
+      if (found && (found.ext || found.ip)) {
+        baForm.value.extIp = [found.ext, found.ip].filter(Boolean).join(' / ');
+      } else {
+        baForm.value.extIp = '';
+      }
     }
   }
   showPrintPreview.value = true;
@@ -427,6 +455,7 @@ async function exportExcelBeritaAcara() {
 onMounted(async () => {
   await fetchBaSettings();
   await fetchDetail();
+  await fetchCubicles();
   if (auth.hasRole('Admin')) {
     try {
       const { data } = await api.get('/users', { params: { role: 'TS' } });
@@ -810,7 +839,15 @@ onMounted(async () => {
               </div>
               <div>
                 <label style="display:block; font-size: 0.8rem; font-weight: 600; margin-bottom: 4px;">Kubikal</label>
-                <input v-model="baForm.kubikal" type="text" style="width:100%; padding: 8px; border: 1px solid #cbd5e1; border-radius: 6px;" />
+                <select v-model="baForm.kubikal" @change="onCubicleChange" style="width:100%; padding: 8px; border: 1px solid #cbd5e1; border-radius: 6px; background: #fff;">
+                  <option value="">-- Pilih Kubikal --</option>
+                  <option v-if="baForm.kubikal && !cubicleList.some(c => c.nama === baForm.kubikal)" :value="baForm.kubikal">
+                    {{ baForm.kubikal }}
+                  </option>
+                  <option v-for="c in cubicleList" :key="c.id || c.nama" :value="c.nama">
+                    {{ c.nama }}{{ c.ext ? ` (Ext: ${c.ext})` : '' }}
+                  </option>
+                </select>
               </div>
               <div>
                 <label style="display:block; font-size: 0.8rem; font-weight: 600; margin-bottom: 4px;">Ext / IP</label>
@@ -915,11 +952,13 @@ onMounted(async () => {
 
                 <div class="ba-signature-box">
                   <table style="width:100%;border:none;margin-bottom:8px;">
-                    <tr>
-                      <td style="width:50%;border:none;"></td>
-                      <td style="width:25%;text-align:center;border:none;font-size:8pt;font-weight:600;">{{ baSettings.ba_location }}, {{ fmtDateFull(new Date()) }}</td>
-                      <td style="width:25%;border:none;"></td>
-                    </tr>
+                    <tbody>
+                      <tr>
+                        <td style="width:50%;border:none;"></td>
+                        <td style="width:25%;text-align:center;border:none;font-size:8pt;font-weight:600;">{{ baSettings.ba_location }}, {{ fmtDateFull(new Date()) }}</td>
+                        <td style="width:25%;border:none;"></td>
+                      </tr>
+                    </tbody>
                   </table>
                   <div style="display:flex;justify-content:flex-end;gap:80px;text-align:center;">
                     <div style="min-width:180px;display:flex;flex-direction:column;align-items:center;">
@@ -1009,7 +1048,7 @@ onMounted(async () => {
 .ba-main-table th { background-color: #5b9bd5 !important; color: #000000 !important; border: 1px solid #000 !important; padding: 6px 4px; font-weight: bold; text-align: center; font-size: 7pt; -webkit-print-color-adjust: exact; print-color-adjust: exact; overflow-wrap: break-word; word-break: normal; }
 .ba-main-table td { border: 1px solid #000 !important; padding: 6px 4px; vertical-align: middle; text-align: center; overflow-wrap: break-word; word-break: break-word; }
 .ba-data-row td { min-height: 60px; height: 60px; }
-.ba-total-row td { /* total styling handled inline to support transparent columns */ }
+
 .ba-signature-box { margin-top: 14px; margin-bottom: 16px; page-break-inside: avoid; }
 .ba-evidence-container { margin-top: 14px; }
 .ba-evidence-grid { display: block; padding: 0; }

@@ -159,9 +159,55 @@ const printableItems = ref([]); // array of items for print
 const printAllMode   = ref(false);
 const showPrintPreview = ref(false);
 
-function exportPdfSingle(item) {
+const cubicleList = ref([]);
+const baForm = ref({
+  nomorSurat: '',
+  namaPerangkat: '',
+  kode: '',
+  kubikal: '',
+  extIp: '',
+  idTaskSip: ''
+});
+
+async function fetchCubicles() {
+  try {
+    const { data } = await api.get('/cubicles');
+    cubicleList.value = Array.isArray(data) ? data : (data.data || []);
+  } catch (err) {
+    console.error('Failed to load cubicles:', err);
+  }
+}
+
+function onCubicleChange() {
+  const selected = cubicleList.value.find(c => c.nama === baForm.value.kubikal);
+  if (selected) {
+    const ext = selected.ext || '';
+    const ip = selected.ip || '';
+    if (ext || ip) {
+      baForm.value.extIp = [ext, ip].filter(Boolean).join(' / ');
+    } else {
+      baForm.value.extIp = '';
+    }
+  }
+}
+
+function openExportPreview(item) {
   printAllMode.value   = false;
   printableItems.value = [item];
+  
+  baForm.value.nomorSurat = item.ticket_number || '';
+  baForm.value.namaPerangkat = item.kategori || '';
+  baForm.value.kode = '';
+  baForm.value.kubikal = item.kategori || '';
+  baForm.value.idTaskSip = item.ticket_number || '';
+  
+  const found = cubicleList.value.find(c => c.nama === baForm.value.kubikal);
+  if (found && (found.ext || found.ip)) {
+    baForm.value.extIp = [found.ext, found.ip].filter(Boolean).join(' / ');
+  } else {
+    baForm.value.extIp = '';
+  }
+  
   showPrintPreview.value = true;
 }
 
@@ -172,8 +218,82 @@ function exportPdfAll() {
   showPrintPreview.value = true;
 }
 
-function executePrint() {
-  window.print();
+async function executePrint() {
+  // Convert image URL to data URL (bypasses print-time auth issues)
+  const toDataUrl = (url) => fetch(url, { credentials: 'include' })
+    .then(r => r.blob())
+    .then(blob => new Promise(resolve => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result);
+      reader.readAsDataURL(blob);
+    }))
+    .catch(() => url); // fallback to original URL if fetch fails
+
+  // Clone the printable area
+  const printEl = document.querySelector('.printable-berita-acara-wrapper');
+  if (!printEl) { window.print(); return; }
+
+  const clone = printEl.cloneNode(true);
+
+  // Replace all img srcs with data URLs in the clone
+  const imgs = clone.querySelectorAll('img');
+  const origImgs = printEl.querySelectorAll('img');
+  for (let i = 0; i < imgs.length; i++) {
+    const src = origImgs[i]?.src;
+    if (src) {
+      const dataUrl = await toDataUrl(src);
+      imgs[i].src = dataUrl;
+    }
+  }
+
+  // Open dedicated print window
+  const printWin = window.open('', '_blank', 'width=1200,height=800');
+  printWin.document.write(`
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <meta charset="utf-8">
+      <title>Berita Acara</title>
+      <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: Arial, sans-serif; font-size: 8pt; color: #000; background: #fff; }
+        @page { size: landscape; margin: 5mm; }
+        @media print {
+          body { margin: 0; }
+          .printable-berita-acara-page { page-break-after: always; }
+          .printable-berita-acara-page:last-child { page-break-after: auto; }
+        }
+        /* KOP */
+        .ba-kop-table { width: 100%; border-collapse: collapse; margin-bottom: 8px; border: 1px solid #000; background-color: #e2e8f0; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+        .ba-kop-table td { border: 1px solid #000; padding: 4px 6px; vertical-align: middle; }
+        /* Info */
+        .ba-info-table { width: 100%; border-collapse: collapse; margin-bottom: 2px; font-size: 7.5pt; border: 1px solid #000; border-top: none; }
+        .ba-info-table td { border: 1px solid #000; padding: 3px 6px; }
+        /* Main table */
+        .ba-main-table { width: 100%; border-collapse: collapse; font-size: 7.5pt; margin-bottom: 12px; table-layout: fixed; }
+        .ba-main-table th { background-color: #5b9bd5 !important; color: #000 !important; border: 1px solid #000 !important; padding: 6px 4px; font-weight: bold; text-align: center; font-size: 7pt; -webkit-print-color-adjust: exact; print-color-adjust: exact; overflow-wrap: break-word; }
+        .ba-main-table td { border: 1px solid #000 !important; padding: 6px 4px; vertical-align: middle; text-align: center; overflow-wrap: break-word; word-break: break-word; }
+        .ba-data-row td { min-height: 60px; height: 60px; }
+        .ba-signature-box { margin-top: 14px; margin-bottom: 16px; }
+        /* Info row */
+        .ba-info-row { display: flex; justify-content: flex-end; align-items: center; font-size: 7.5pt; padding: 3px 6px; margin-bottom: 6px; }
+        .printable-berita-acara-wrapper { width: 100%; }
+        .printable-berita-acara-page { margin-bottom: 20px; }
+        .ba-kop-left { width: 16%; padding: 0 !important; vertical-align: top !important; }
+        .ba-kop-dept { width: 20%; text-align: center; font-weight: 700; font-size: 8.5pt; }
+        .ba-kop-title { width: 46%; text-align: center; font-weight: 800; }
+        .ba-kop-logo { width: 18%; text-align: center; }
+      </style>
+    </head>
+    <body>${clone.outerHTML}</body>
+    </html>
+  `);
+  printWin.document.close();
+  printWin.focus();
+  setTimeout(() => {
+    printWin.print();
+    printWin.close();
+  }, 800);
 }
 
 function exportExcelSingle(item) {
@@ -202,14 +322,14 @@ function exportExcelSingle(item) {
           <td colspan="7" class="header-title">${s.ba_brand_name}<br/>${s.ba_title}</td>
         </tr>
         <tr>
-          <td colspan="4"><b>Nomor Surat:</b> ${d.ticket_number || '-'}</td>
-          <td colspan="4"><b>Kubikal:</b> ${d.kategori || '-'}</td>
+          <td colspan="4"><b>Nomor Surat:</b> ${!printAllMode.value ? baForm.value.nomorSurat : (d.ticket_number || '-')}</td>
+          <td colspan="4"><b>Kubikal:</b> ${!printAllMode.value ? baForm.value.kubikal : (d.kategori || '-')}</td>
           <td colspan="3"><b>Periode:</b> ${getYear(d.created_at)}</td>
           <td colspan="2"><b>Bulan:</b> ${getMonthName(d.created_at)}</td>
         </tr>
         <tr>
-          <td colspan="4"><b>Nama Perangkat:</b> ${d.kategori || '-'}</td>
-          <td colspan="9"><b>Kode:</b> -</td>
+          <td colspan="4"><b>Nama Perangkat:</b> ${!printAllMode.value ? baForm.value.namaPerangkat : (d.kategori || '-')}</td>
+          <td colspan="9"><b>Kode:</b> ${!printAllMode.value ? baForm.value.kode : '-'}</td>
         </tr>
         <tr><td colspan="13"></td></tr>
         <tr class="th-blue">
@@ -233,8 +353,8 @@ function exportExcelSingle(item) {
           <td>${formatTimeOnly(d.start_time || d.created_at)}</td>
           <td>${formatTimeOnly(d.end_time || d.resolved_at)}</td>
           <td>${d.jenis_gangguan === 'Massal' ? 'ALL AGENT' : (d.creator?.name || '-')}</td>
-          <td>-</td>
-          <td>${d.ticket_number || '-'}</td>
+          <td>${!printAllMode.value ? baForm.value.extIp : '-'}</td>
+          <td>${!printAllMode.value ? baForm.value.idTaskSip : (d.ticket_number || '-')}</td>
           <td>${d.penyebab_permasalahan || d.deskripsi || '-'}</td>
           <td>${d.penyelesaian_masalah || '-'}</td>
           <td>${d.impact || '-'}</td>
@@ -368,6 +488,7 @@ function exportExcelAll() {
 onMounted(() => {
   fetchBaSettings();
   fetchGangguan();
+  fetchCubicles();
 });
 </script>
 
@@ -386,22 +507,7 @@ onMounted(() => {
         </div>
       </div>
 
-      <!-- Buttons Export Berita Acara Bulk -->
-      <div style="display:flex; gap:8px; flex-wrap:wrap;">
-        <button 
-          @click="exportPdfAll" 
-          style="display:inline-flex; align-items:center; gap:6px; background:linear-gradient(135deg, #1d4ed8, #2563eb); color:#fff; border:none; border-radius:8px; padding:8px 14px; font-weight:700; font-size:0.82rem; cursor:pointer; box-shadow:0 4px 10px rgba(37,99,235,0.25);"
-        >
-          📄 Export PDF Berita Acara (Semua)
-        </button>
 
-        <button 
-          @click="exportExcelAll" 
-          style="display:inline-flex; align-items:center; gap:6px; background:#16a34a; color:#fff; border:none; border-radius:8px; padding:8px 14px; font-weight:700; font-size:0.82rem; cursor:pointer; box-shadow:0 4px 10px rgba(22,163,74,0.25);"
-        >
-          📊 Export Excel Berita Acara (Semua)
-        </button>
-      </div>
     </div>
 
     <!-- Toolbar -->
@@ -517,8 +623,6 @@ onMounted(() => {
               <td class="sticky-aksi">
                 <div style="display:flex; justify-content:center; align-items:center; gap:5px;">
                   <RouterLink :to="`/gangguan/${item.id}`" class="btn-lihat">Lihat</RouterLink>
-                  <button @click="exportPdfSingle(item)" class="btn-pdf-action" title="Export PDF Berita Acara Tiket Ini">📄 PDF</button>
-                  <button @click="exportExcelSingle(item)" class="btn-excel-action" title="Export Excel Berita Acara Tiket Ini">📊 Excel</button>
                   <button v-if="auth.hasRole('Admin') || auth.hasRole('TS')" @click="promptDelete(item)" class="btn-hapus">Hapus</button>
                 </div>
               </td>
@@ -571,66 +675,118 @@ onMounted(() => {
         </div>
         
         <div class="print-preview-body">
+          <div v-if="!printAllMode" style="background: #fff; padding: 16px; border-radius: 8px; margin-bottom: 20px; display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
+            <div>
+              <label style="display:block; font-size: 0.8rem; font-weight: 600; margin-bottom: 4px;">Nomor Surat</label>
+              <input v-model="baForm.nomorSurat" type="text" style="width:100%; padding: 8px; border: 1px solid #cbd5e1; border-radius: 6px;" />
+            </div>
+            <div>
+              <label style="display:block; font-size: 0.8rem; font-weight: 600; margin-bottom: 4px;">Nama Perangkat</label>
+              <select v-model="baForm.namaPerangkat" style="width:100%; padding: 8px; border: 1px solid #cbd5e1; border-radius: 6px; background: #fff;">
+                <option value="SYSCCA">SYSCCA</option>
+                <option value="SYSCCAE">SYSCCAE</option>
+                <option value="ICRM+">ICRM+</option>
+                <option value="HARDWARE">HARDWARE</option>
+                <option value="BOTIKA">BOTIKA</option>
+                <option value="ICONNPAY">ICONNPAY</option>
+                <option value="SIP">SIP</option>
+                <option value="INTERNET">INTERNET</option>
+                <option value="LOCAL NETWORK">LOCAL NETWORK</option>
+                <option value="MICROSIP">MICROSIP</option>
+              </select>
+            </div>
+            <div>
+              <label style="display:block; font-size: 0.8rem; font-weight: 600; margin-bottom: 4px;">Kode</label>
+              <input v-model="baForm.kode" type="text" style="width:100%; padding: 8px; border: 1px solid #cbd5e1; border-radius: 6px;" />
+            </div>
+            <div>
+              <label style="display:block; font-size: 0.8rem; font-weight: 600; margin-bottom: 4px;">Kubikal</label>
+              <select v-model="baForm.kubikal" @change="onCubicleChange" style="width:100%; padding: 8px; border: 1px solid #cbd5e1; border-radius: 6px; background: #fff;">
+                <option value="">-- Pilih Kubikal --</option>
+                <option v-if="baForm.kubikal && !cubicleList.some(c => c.nama === baForm.kubikal)" :value="baForm.kubikal">
+                  {{ baForm.kubikal }}
+                </option>
+                <option v-for="c in cubicleList" :key="c.id || c.nama" :value="c.nama">
+                  {{ c.nama }}{{ c.ext ? ` (Ext: ${c.ext})` : '' }}
+                </option>
+              </select>
+            </div>
+            <div>
+              <label style="display:block; font-size: 0.8rem; font-weight: 600; margin-bottom: 4px;">Ext / IP</label>
+              <input v-model="baForm.extIp" type="text" style="width:100%; padding: 8px; border: 1px solid #cbd5e1; border-radius: 6px;" />
+            </div>
+            <div>
+              <label style="display:block; font-size: 0.8rem; font-weight: 600; margin-bottom: 4px;">ID Task SIP</label>
+              <input v-model="baForm.idTaskSip" type="text" style="width:100%; padding: 8px; border: 1px solid #cbd5e1; border-radius: 6px;" />
+            </div>
+          </div>
+          
           <div class="printable-berita-acara-wrapper">
             <div v-for="(printableItem, pIdx) in printableItems" :key="printableItem.id || pIdx" class="printable-berita-acara-page">
-              
-              <!-- KOP Table - 4 Kolom -->
-              <table class="ba-kop-table">
-                <tr>
-                  <td class="ba-kop-left">
-                    <table style="width:100%;border-collapse:collapse;font-size:7.5pt;">
-                      <tr><td style="border-right:1px solid #000;padding:2px 6px;white-space:nowrap;"><strong>Halaman</strong></td><td style="padding:2px 6px;">: 1</td></tr>
-                      <tr><td style="border-right:1px solid #000;padding:2px 6px;white-space:nowrap;"><strong>Tanggal Berlaku</strong></td><td style="padding:2px 6px;">: {{ formatDateOnly(printableItem.created_at) }}</td></tr>
-                      <tr><td style="border-right:1px solid #000;padding:2px 6px;white-space:nowrap;"><strong>Departemen</strong></td><td style="padding:2px 6px;">:</td></tr>
-                    </table>
-                  </td>
-                  <td class="ba-kop-dept">{{ baSettings.ba_departemen }}</td>
-                  <td class="ba-kop-title">
-                    <div style="font-size:9pt;font-weight:800;">{{ baSettings.ba_brand_name }}</div>
-                    <div style="font-size:8.5pt;font-weight:900;margin-top:3px;">{{ baSettings.ba_title }}</div>
-                  </td>
-                  <td class="ba-kop-logo">
-                    <img v-if="baSettings.ba_logo_url" :src="baSettings.ba_logo_url" style="max-height:52px;max-width:110px;object-fit:contain;" />
-                    <div v-else style="display:inline-flex;align-items:center;gap:3px;border:1.5px solid #003;padding:3px 6px;border-radius:3px;">
-                      <span style="color:#d97706;font-weight:900;font-size:13pt;">⚡ PLN</span>
-                      <span style="color:#0284c7;font-weight:800;font-size:9pt;">Icon Plus</span>
-                    </div>
-                  </td>
-                </tr>
+              <!-- KOP Table - MATCHING DETAIL PAGE -->
+              <table class="ba-kop-table" style="text-align: center; font-size: 8.5pt; font-family: Calibri, Arial, sans-serif; background-color: #e2e8f0; border: 1px solid #000; -webkit-print-color-adjust: exact; print-color-adjust: exact; margin-bottom: 8px;">
+                <tbody>
+                  <tr>
+                    <td style="width: 3%; border: 1px solid #000; padding: 4px; font-weight: bold;">Halaman</td>
+                    <td style="width: 4.5%; border: 1px solid #000; padding: 4px; font-weight: bold;">Tanggal Berlaku</td>
+                    <td style="width: 34%; border: 1px solid #000; padding: 4px; font-weight: bold;">Departemen:</td>
+                    <td style="width: 46.5%; border: 1px solid #000; padding: 4px; font-weight: bold;">{{ baSettings.ba_brand_name }}</td>
+                    <td rowspan="2" style="width: 12%; border: 1px solid #000; padding: 4px; background-color: #fff;">
+                      <img v-if="baSettings.ba_logo_url" :src="baSettings.ba_logo_url" style="max-height:55px;max-width:100%;object-fit:contain;" />
+                      <div v-else style="display:inline-flex;align-items:center;gap:3px;border:1.5px solid #003;padding:3px 6px;border-radius:3px;">
+                        <span style="color:#d97706;font-weight:900;font-size:11pt;">⚡ PLN</span>
+                        <span style="color:#0284c7;font-weight:800;font-size:7pt;">Icon Plus</span>
+                      </div>
+                    </td>
+                  </tr>
+                  <tr>
+                    <td style="border: 1px solid #000; padding: 4px; font-weight: bold;">1</td>
+                    <td style="border: 1px solid #000; padding: 4px; font-weight: bold;">{{ formatDateOnly(printableItem.created_at) }}</td>
+                    <td style="border: 1px solid #000; padding: 4px; font-weight: bold;">{{ baSettings.ba_departemen }}</td>
+                    <td style="border: 1px solid #000; padding: 4px; font-weight: bold;">{{ baSettings.ba_title }}</td>
+                  </tr>
+                </tbody>
               </table>
 
-              <!-- Sub Header -->
-              <table class="ba-info-table">
-                <tr>
-                  <td style="width:33%;"><strong>Nomor Surat</strong> : {{ printableItem.ticket_number }}</td>
-                  <td style="width:33%;"><strong>Nama Perangkat</strong> : {{ printableItem.kategori || '-' }}</td>
-                  <td style="width:34%;"><strong>Kode</strong> : -</td>
-                </tr>
-              </table>
-              <!-- Nomor / Periode / Bulan Row -->
-              <div class="ba-info-row">
-                <span style="margin-right:30px;"><strong>Nomor :</strong> -</span>
-                <span style="margin-right:30px;"><strong>Periode : {{ getYear(printableItem.created_at) }}</strong></span>
-                <span><strong>Bulan : {{ getMonthName(printableItem.created_at) }}</strong></span>
+              <div style="font-size: 8pt; font-weight: bold; margin-bottom: 12px; padding: 0 4px; line-height: 1.6;">
+                <div style="display: flex;">
+                  <div style="width: 110px;">Nomor Surat</div>
+                  <div>: {{ !printAllMode ? (baForm.nomorSurat || '-') : (printableItem.ticket_number || '-') }}</div>
+                </div>
+                <div style="display: flex;">
+                  <div style="width: 110px;">Nama Perangkat</div>
+                  <div>: {{ !printAllMode ? (baForm.namaPerangkat || '-') : (printableItem.kategori || '-') }}</div>
+                </div>
+                <div style="display: flex; justify-content: space-between;">
+                  <div style="display: flex;">
+                    <div style="width: 110px;">Kode</div>
+                    <div style="width: 150px;">: {{ !printAllMode ? (baForm.kode || '-') : '-' }}</div>
+                    <div>Kubikal : &nbsp; {{ !printAllMode ? (baForm.kubikal || '-') : (printableItem.kategori || '-') }}</div>
+                  </div>
+                  <div style="display: flex; gap: 20px;">
+                    <div>Periode : {{ getYear(printableItem.created_at) }}</div>
+                    <div>Bulan : {{ getMonthName(printableItem.created_at) }}</div>
+                  </div>
+                </div>
               </div>
 
               <!-- Table Utama Kronologi -->
               <table class="ba-main-table">
                 <thead>
                   <tr>
-                    <th style="width:3%;">No</th>
-                    <th style="width:8%;">Hari/Tanggal</th>
-                    <th style="width:7%;">Start Downtime<br/><span style="font-weight:normal;font-size:7pt;">(h:mm:ss)</span></th>
-                    <th style="width:7%;">End Downtime<br/><span style="font-weight:normal;font-size:7pt;">(h:mm:ss)</span></th>
-                    <th style="width:9%;">Nama Agent</th>
-                    <th style="width:5%;">Ext / IP</th>
-                    <th style="width:8%;">ID Task SIP</th>
-                    <th style="width:13%;">Penyebab Permasalahan</th>
-                    <th style="width:13%;">Penyelesaian Masalah</th>
-                    <th style="width:8%;">Impact</th>
-                    <th style="width:7%;">Durasi Downtime</th>
-                    <th style="width:7%;">Petugas TS Shift ...</th>
-                    <th style="width:5%;">Analisa</th>
+                    <th style="width:2.5%;">No</th>
+                    <th style="width:7%;">HARI/<br/>TANGGAL</th>
+                    <th style="width:8%;">START DOWNTIME<br/><span style="font-weight:normal;font-size:6.5pt;">(h:mm:ss)</span></th>
+                    <th style="width:8%;">END DOWNTIME<br/><span style="font-weight:normal;font-size:6.5pt;">(h:mm:ss)</span></th>
+                    <th style="width:7%;">NAMA AGENT</th>
+                    <th style="width:7%;">EXT / IP</th>
+                    <th style="width:12%;">ID TASK SIP</th>
+                    <th style="width:10%;">PENYEBAB PERMASALAHAN</th>
+                    <th style="width:10%;">PENYELESAIAN MASALAH</th>
+                    <th style="width:6.5%;">IMPACT</th>
+                    <th style="width:8%;">DURASI DOWNTIME</th>
+                    <th style="width:7%;">PETUGAS TS</th>
+                    <th style="width:7%;">ANALISA</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -640,8 +796,8 @@ onMounted(() => {
                     <td style="text-align: center;">{{ formatTimeOnly(printableItem.start_time || printableItem.created_at) }}</td>
                     <td style="text-align: center;">{{ formatTimeOnly(printableItem.end_time || printableItem.resolved_at) }}</td>
                     <td>{{ printableItem.jenis_gangguan === 'Massal' ? 'ALL AGENT' : (printableItem.creator?.name || '-') }}</td>
-                    <td style="text-align: center;">-</td>
-                    <td>{{ printableItem.ticket_number }}</td>
+                    <td style="text-align: center;">{{ !printAllMode ? (baForm.extIp || '-') : '-' }}</td>
+                    <td>{{ !printAllMode ? (baForm.idTaskSip || '-') : (printableItem.ticket_number || '-') }}</td>
                     <td>{{ printableItem.penyebab_permasalahan || printableItem.deskripsi || '-' }}</td>
                     <td>{{ printableItem.penyelesaian_masalah || '-' }}</td>
                     <td>{{ printableItem.impact || '-' }}</td>
@@ -650,8 +806,10 @@ onMounted(() => {
                     <td>{{ printableItem.analisa || '-' }}</td>
                   </tr>
                   <tr class="ba-total-row">
-                    <td colspan="10" style="text-align:right;font-weight:bold;">TOTAL DOWN TIME :</td>
-                    <td colspan="3" style="font-weight:bold;text-align:center;">{{ calculateDurasi(printableItem.start_time, printableItem.end_time) }}</td>
+                    <td colspan="7" style="border:none !important; background:transparent !important;"></td>
+                    <td colspan="3" class="ba-total-cell" style="text-align:right; background-color:#5b9bd5 !important; color:#000 !important; font-weight:bold; border:1px solid #000 !important; -webkit-print-color-adjust:exact; print-color-adjust:exact;">TOTAL DOWN TIME :</td>
+                    <td class="ba-total-cell" style="text-align:center; background-color:#5b9bd5 !important; color:#000 !important; font-weight:bold; border:1px solid #000 !important; -webkit-print-color-adjust:exact; print-color-adjust:exact;">{{ calculateDurasi(printableItem.start_time, printableItem.end_time) }}</td>
+                    <td colspan="2" style="border:none !important; background:transparent !important;"></td>
                   </tr>
                 </tbody>
               </table>
@@ -659,11 +817,13 @@ onMounted(() => {
               <!-- Signature Box -->
               <div class="ba-signature-box">
                 <table style="width:100%;border:none;margin-bottom:8px;">
-                  <tr>
-                    <td style="width:50%;border:none;"></td>
-                    <td style="width:25%;text-align:center;border:none;font-size:8pt;font-weight:600;">{{ baSettings.ba_location }}, {{ formatDateFull(new Date()) }}</td>
-                    <td style="width:25%;border:none;"></td>
-                  </tr>
+                  <tbody>
+                    <tr>
+                      <td style="width:50%;border:none;"></td>
+                      <td style="width:25%;text-align:center;border:none;font-size:8pt;font-weight:600;">{{ baSettings.ba_location }}, {{ formatDateFull(new Date()) }}</td>
+                      <td style="width:25%;border:none;"></td>
+                    </tr>
+                  </tbody>
                 </table>
                 <div style="display:flex;justify-content:flex-end;gap:80px;text-align:center;">
                   <div style="min-width:180px;display:flex;flex-direction:column;align-items:center;">
@@ -693,6 +853,7 @@ onMounted(() => {
 
         <div class="print-preview-footer">
           <button @click="showPrintPreview = false" style="padding: 8px 16px; background: #fff; border: 1px solid #cbd5e1; border-radius: 6px; cursor: pointer; font-weight: 600;">Batal</button>
+          <button v-if="!printAllMode" @click="exportExcelSingle(printableItems[0])" style="padding: 8px 16px; background: #16a34a; color: #fff; border: none; border-radius: 6px; cursor: pointer; font-weight: 600;">📊 Export Excel</button>
           <button @click="executePrint" style="padding: 8px 16px; background: #1d4ed8; color: #fff; border: none; border-radius: 6px; cursor: pointer; font-weight: 600;">🖨️ Cetak PDF</button>
         </div>
       </div>
@@ -767,7 +928,7 @@ table { border: 1px solid #cbd5e1; }
 .table-row-hover:hover { background: #f1f5f9 !important; }
 .table-row-hover .sticky-aksi { background: #ffffff; transition: background 0.15s; }
 .table-row-hover:nth-child(even) .sticky-aksi { background: #fcfcfc; }
-.table-row-hover:hover .sticky-aksi { background: #f1f5f9 !important; }
+.table-row-hover:hover .sticky-aksi { background: #f1f5f9 !important; z-index: 10; }
 
 .sticky-aksi { position: sticky; right: 0; padding: 10px 16px; text-align: center; z-index: 1; box-shadow: -4px 0 12px rgba(0,0,0,0.05); }
 
@@ -776,15 +937,10 @@ table { border: 1px solid #cbd5e1; }
 }
 .btn-lihat:hover { background: #dbeafe; }
 
-.btn-pdf-action {
-  padding: 4px 10px; border: 1px solid #93c5fd; background: #eff6ff; color: #1d4ed8; font-weight: 700; font-size: 0.72rem; border-radius: 999px; cursor: pointer; transition: background 0.15s;
+.btn-export {
+  padding: 4px 10px; border: 1px solid #cbd5e1; background: #f8fafc; color: #334155; font-weight: 600; font-size: 0.72rem; border-radius: 999px; cursor: pointer; transition: background 0.15s;
 }
-.btn-pdf-action:hover { background: #dbeafe; }
-
-.btn-excel-action {
-  padding: 4px 10px; border: 1px solid #86efac; background: #f0fdf4; color: #15803d; font-weight: 700; font-size: 0.72rem; border-radius: 999px; cursor: pointer; transition: background 0.15s;
-}
-.btn-excel-action:hover { background: #dcfce7; }
+.btn-export:hover { background: #e2e8f0; }
 
 .btn-hapus {
   display: inline-block; padding: 4px 10px; border: none; cursor: pointer; background: #fef2f2; color: #dc2626; font-weight: 600; font-size: 0.75rem; border-radius: 999px; text-decoration: none; transition: background 0.15s;
