@@ -1,14 +1,14 @@
 <script setup>
 import { onMounted, ref } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
-import api from '../services/api';
+import api, { API_BASE_URL } from '../services/api';
 
 const route = useRoute();
 const router = useRouter();
 const item = ref(null);
 const loading = ref(false);
 const error = ref('');
-const apiBaseUrl = import.meta.env.VITE_API_URL || 'http://localhost:8000/api';
+const apiBaseUrl = API_BASE_URL;
 
 function statusLabel(status) {
   return String(status || 'unknown')

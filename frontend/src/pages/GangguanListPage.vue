@@ -23,7 +23,6 @@ const filterEndDate = ref('');
 const filterJenis = ref('');
 
 const showFilters = ref(window.innerWidth > 768);
-const apiBaseUrl = import.meta.env.VITE_API_URL || 'http://localhost:8000/api';
 
 function getRowStyle(status) {
   const s = String(status || '').toLowerCase();

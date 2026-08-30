@@ -2,7 +2,7 @@
 import { onMounted, ref } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { useAuthStore } from '../stores/auth';
-import api from '../services/api';
+import api, { API_BASE_URL } from '../services/api';
 
 const route  = useRoute();
 const router = useRouter();
@@ -26,7 +26,7 @@ const form = ref({
   id_task_sip: '',
   kategori: ''
 });
-const apiBaseUrl = import.meta.env.VITE_API_URL || 'http://localhost:8000/api';
+const apiBaseUrl = API_BASE_URL;
 
 // ───── helpers ─────
 function fmt(value) {
