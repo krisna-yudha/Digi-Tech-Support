@@ -808,14 +808,14 @@ watch(() => route.query, (q) => {
         <!-- Desktop Pagination (>= 769px) -->
         <div class="desktop-pagination-inner">
           <span class="pagination-info">
-            Menampilkan {{ displayedItems.length }} data{{ total ? ' (Total ' + total + ')' : '' }}
+            Menampilkan <strong>{{ total > 0 ? ((page - 1) * perPage + 1) + '–' + Math.min(page * perPage, total) : displayedItems.length }}</strong> dari <strong>{{ total }}</strong> data
           </span>
           <div class="pagination-buttons">
-            <button class="pg-btn" :disabled="page <= 1" @click="fetchGangguan(1)">«</button>
-            <button class="pg-btn" :disabled="page <= 1" @click="fetchGangguan(page - 1)">‹</button>
+            <button class="pg-btn" :disabled="page <= 1" @click="fetchGangguan(1)" title="Halaman Pertama">«</button>
+            <button class="pg-btn" :disabled="page <= 1" @click="fetchGangguan(page - 1)" title="Halaman Sebelumnya">‹</button>
             <button v-for="n in pageNumbers()" :key="n" class="pg-btn" :class="{'pg-active': n === page}" @click="fetchGangguan(n)">{{ n }}</button>
-            <button class="pg-btn" :disabled="page >= lastPage" @click="fetchGangguan(page + 1)">›</button>
-            <button class="pg-btn" :disabled="page >= lastPage" @click="fetchGangguan(lastPage)">»</button>
+            <button class="pg-btn" :disabled="page >= lastPage" @click="fetchGangguan(page + 1)" title="Halaman Selanjutnya">›</button>
+            <button class="pg-btn" :disabled="page >= lastPage" @click="fetchGangguan(lastPage)" title="Halaman Terakhir">»</button>
           </div>
         </div>
 
@@ -1185,14 +1185,40 @@ table { border: 1px solid #cbd5e1; }
 .elegant-scroll::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
 .elegant-scroll::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
 
+.desktop-pagination-inner {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  width: 100%;
+}
+.mobile-pagination-inner {
+  display: none;
+}
 .pagination-wrap { display: flex; justify-content: space-between; align-items: center; padding: 12px 20px; border-top: 1px solid #f1f5f9; background: #fff; flex-wrap: wrap; gap: 12px; }
-.pagination-info { font-size: 0.8rem; color: #64748b; }
-.pagination-buttons { display: flex; gap: 4px; align-items: center; }
+.pagination-info { font-size: 0.82rem; color: #64748b; }
+.pagination-info strong { color: #1e293b; font-weight: 700; }
+.pagination-buttons { display: flex; gap: 5px; align-items: center; }
 
-.pg-btn { padding: 5px 10px; border: 1px solid #e2e8f0; border-radius: 6px; background: #fff; color: #334155; font-size: 0.82rem; cursor: pointer; transition: all 0.15s; min-width: 32px; }
+.pg-btn {
+  min-width: 34px;
+  height: 34px;
+  padding: 0 10px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #fff;
+  color: #334155;
+  font-size: 0.84rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  user-select: none;
+}
 .pg-btn:hover:not(:disabled) { background: #eff6ff; border-color: #93c5fd; color: #2563eb; }
 .pg-btn:disabled { opacity: 0.4; cursor: default; }
-.pg-active { background: #2563eb !important; color: #fff !important; border-color: #2563eb !important; }
+.pg-active { background: #2563eb !important; color: #fff !important; border-color: #2563eb !important; box-shadow: 0 2px 6px rgba(37, 99, 235, 0.3); }
 
 /* ─── Mobile Ticket Cards Layout ─── */
 .mobile-cards-wrap {

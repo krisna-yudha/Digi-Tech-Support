@@ -1,5 +1,7 @@
 <script setup>
-import { ref, onMounted, computed, watch } from 'vue';
+import { ref, computed, watch } from 'vue';
+import ExcelJS from 'exceljs';
+import * as XLSX from 'xlsx';
 import { API_BASE_URL, STORAGE_BASE_URL } from '../services/api';
 
 // ── Props ─────────────────────────────────────────────────────────────────────
@@ -13,7 +15,6 @@ const emit = defineEmits(['close']);
 
 // ── State ─────────────────────────────────────────────────────────────────────
 const zoomLevel     = ref(100);
-const exceljsLoaded = ref(false);
 const exporting     = ref(false);
 const exportSuccess = ref('');
 
@@ -328,36 +329,10 @@ async function getImageBlobAsBase64(urlOrPath) {
   return null;
 }
 
-// ── CDN Loader ────────────────────────────────────────────────────────────────
-function loadScript(src, id) {
-  return new Promise((resolve, reject) => {
-    if (document.getElementById(id)) { resolve(); return; }
-    const s = document.createElement('script');
-    s.src = src; s.id = id; s.onload = resolve; s.onerror = reject;
-    document.head.appendChild(s);
-  });
-}
-
-async function loadExcelLibraries() {
-  try {
-    await loadScript('https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.3.0/exceljs.min.js', 'exceljs-cdn')
-      .catch(() => loadScript('https://cdn.jsdelivr.net/npm/exceljs@4.3.0/dist/exceljs.min.js', 'exceljs-cdn-fb'));
-    exceljsLoaded.value = true;
-  } catch(e) {
-    console.warn('ExcelJS load notice:', e);
-  }
-}
-
-// ── EXPORT PERFECT .XLSX (Full Native OpenXML Matching Selected Gangguan) ────
+// ── EXPORT PERFECT .XLSX (Full Native OpenXML with Images & Signatures) ──────
 async function exportExcelXlsx() {
   exporting.value = true;
   try {
-    const ExcelJS = window.ExcelJS;
-    if (!ExcelJS) {
-      alert('Library ExcelJS sedang dimuat. Silakan coba lagi beberapa detik.');
-      return;
-    }
-
     const d = props.item;
     const s = props.baSettings;
     const f = form.value;
@@ -583,7 +558,7 @@ async function exportExcelXlsx() {
     setCell(sheet.getCell(`J${totalRowIndex}`), { bg: '5B9BD5', bold: true });
     setCell(sheet.getCell(`K${totalRowIndex}`), { bg: '5B9BD5', bold: true, align: 'center', size: 8.5 });
 
-    // ── Signatures Section (Clean Matching Reference) ─────────────────────────
+    // ── Signatures Section ────────────────────────────────────────────────────
     const s1 = sheet.addRow([]);
     s1.height = 10;
 
@@ -737,8 +712,9 @@ async function exportExcelXlsx() {
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+    URL.revokeObjectURL(link.href);
 
-    exportSuccess.value = 'Dokumen Excel (.xlsx) berhasil diunduh!';
+    exportSuccess.value = 'Dokumen Excel (.xlsx) berhasil diunduh lengkap dengan gambar!';
     setTimeout(() => { exportSuccess.value = ''; }, 4000);
   } catch (err) {
     console.error('Excel export error:', err);
@@ -747,10 +723,6 @@ async function exportExcelXlsx() {
     exporting.value = false;
   }
 }
-
-onMounted(async () => {
-  await loadExcelLibraries();
-});
 </script>
 
 <template>
@@ -987,7 +959,7 @@ onMounted(async () => {
             class="spr-btn spr-btn-primary"
             :disabled="exporting"
             @click="exportExcelXlsx"
-            title="Download file Excel resmi berformat (.xlsx) lengkap dengan gambar"
+            title="Download file Excel resmi berformat (.xlsx) lengkap dengan gambar & tanda tangan"
           >
             <span v-if="exporting" class="spr-spinner-sm"></span>
             {{ exporting ? 'Menyematkan Gambar & Menyiapkan...' : '⬇️ Download Excel (.xlsx)' }}
