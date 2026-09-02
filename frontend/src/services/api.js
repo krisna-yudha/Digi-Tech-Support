@@ -2,6 +2,7 @@ import axios from 'axios';
 import { useAuthStore } from '../stores/auth';
 
 export const API_BASE_URL = import.meta.env.VITE_API_URL || 'https://apits.gentz.me/api';
+export const STORAGE_BASE_URL = API_BASE_URL.replace(/\/api\/?$/, '') + '/storage';
 
 const api = axios.create({
   baseURL: API_BASE_URL

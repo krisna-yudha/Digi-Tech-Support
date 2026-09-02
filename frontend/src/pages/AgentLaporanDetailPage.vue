@@ -104,8 +104,14 @@ onMounted(fetchDetail);
       <article class="card" style="grid-column: 1 / -1;">
         <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; flex-wrap: wrap; margin-bottom: 20px;">
           <div>
-            <p style="margin: 0 0 4px; font-size: 0.82rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em;">Nomor Tiket</p>
-            <h3 style="margin: 0; font-size: 1.3rem; letter-spacing: 0.02em;">{{ item.ticket_number }}</h3>
+            <template v-if="item.id_task_sip && item.id_task_sip !== '-'">
+              <p style="margin: 0 0 4px; font-size: 0.82rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em;">Nomor Tiket / ID Task SIP</p>
+              <h3 style="margin: 0; font-size: 1.3rem; letter-spacing: 0.02em;">{{ item.id_task_sip }}</h3>
+            </template>
+            <template v-else>
+              <p style="margin: 0 0 4px; font-size: 0.82rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em;">Laporan Gangguan</p>
+              <h3 style="margin: 0; font-size: 1.3rem; letter-spacing: 0.02em;">{{ item.judul || item.kategori || 'Detail Laporan' }}</h3>
+            </template>
           </div>
           <div style="display: flex; gap: 8px; flex-wrap: wrap; align-items: center;">
             <span

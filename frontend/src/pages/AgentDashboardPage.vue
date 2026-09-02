@@ -96,8 +96,8 @@ onMounted(async () => {
           >
             <div style="display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap;">
               <div style="flex: 1; min-width: 0;">
-                <p style="margin: 0 0 4px; font-weight: 700;">{{ report.ticket_number }}</p>
-                <p style="margin: 0 0 4px; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">{{ report.judul }}</p>
+                <p style="margin: 0 0 4px; font-weight: 700;">{{ (report.id_task_sip && report.id_task_sip !== '-') ? report.id_task_sip : (report.judul || report.kategori || 'Gangguan') }}</p>
+                <p style="margin: 0 0 4px; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">{{ report.judul || report.kategori || '-' }}</p>
                 <p style="margin: 0; font-size: 0.8rem; color: var(--muted);">Dibuat: {{ formatDateTime(report.created_at) }}</p>
               </div>
               <div style="display: flex; align-items: center; gap: 10px; flex-shrink: 0;">

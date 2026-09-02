@@ -1,9 +1,11 @@
 <script setup>
-import { onMounted, ref } from 'vue';
+import { computed, onMounted, ref, watch } from 'vue';
+import { useRoute } from 'vue-router';
 import { useAuthStore } from '../stores/auth';
 import api from '../services/api';
 
 const auth = useAuthStore();
+const route = useRoute();
 
 const items    = ref([]);
 const loading  = ref(false);
@@ -17,10 +19,81 @@ const sortDir      = ref('desc');
 const perPage      = ref(10);
 const search       = ref('');
 const filterStatus = ref('');
+const filterKategori = ref('');
 const filterPeriod = ref('');
 const filterStartDate = ref('');
 const filterEndDate = ref('');
 const filterJenis = ref('');
+
+const kategoriOptions = ref([
+  'SYSCCA', 'SYSCCAE', 'ICRM+', 'HARDWARE', 'BOTIKA',
+  'ICONNPAY', 'SIP', 'INTERNET', 'LOCAL NETWORK', 'MICROSIP'
+]);
+
+const displayedItems = computed(() => {
+  let list = [...(items.value || [])];
+
+  // 1. Filter Kategori
+  if (filterKategori.value) {
+    const k = filterKategori.value.toLowerCase().trim();
+    list = list.filter(item => {
+      const kat = String(item.kategori || '').toLowerCase().trim();
+      const cub = String(item.cubicle_name || '').toLowerCase().trim();
+      const jud = String(item.judul || '').toLowerCase().trim();
+      return kat === k || kat.includes(k) || cub === k || jud.includes(k);
+    });
+  }
+
+  // 2. Filter Search
+  if (search.value) {
+    const q = search.value.toLowerCase().trim();
+    list = list.filter(item => {
+      const jud = String(item.judul || '').toLowerCase();
+      const kat = String(item.kategori || '').toLowerCase();
+      const tNum = String(item.ticket_number || '').toLowerCase();
+      const sip = String(item.id_task_sip || '').toLowerCase();
+      const agent = String(item.creator?.name || '').toLowerCase();
+      const ts = String(item.assignee?.name || '').toLowerCase();
+      const peny = String(item.penyebab_permasalahan || '').toLowerCase();
+      const solv = String(item.penyelesaian_masalah || '').toLowerCase();
+      const impact = String(item.impact || '').toLowerCase();
+      return jud.includes(q) || kat.includes(q) || tNum.includes(q) || sip.includes(q) || agent.includes(q) || ts.includes(q) || peny.includes(q) || solv.includes(q) || impact.includes(q);
+    });
+  }
+
+  // 3. Filter Status
+  if (filterStatus.value) {
+    list = list.filter(item => String(item.status || '').toLowerCase() === filterStatus.value.toLowerCase());
+  }
+
+  // 4. Filter Jenis Gangguan
+  if (filterJenis.value) {
+    list = list.filter(item => String(item.jenis_gangguan || '').toLowerCase() === filterJenis.value.toLowerCase());
+  }
+
+  // 5. Client-Side Sorting
+  if (sortBy.value) {
+    list.sort((a, b) => {
+      let valA = a[sortBy.value];
+      let valB = b[sortBy.value];
+      if (sortBy.value === 'created_at' || sortBy.value === 'start_time' || sortBy.value === 'end_time') {
+        valA = valA ? new Date(valA).getTime() : 0;
+        valB = valB ? new Date(valB).getTime() : 0;
+      } else if (sortBy.value === 'durasi') {
+        valA = Number(valA || 0);
+        valB = Number(valB || 0);
+      } else {
+        valA = String(valA || '').toLowerCase();
+        valB = String(valB || '').toLowerCase();
+      }
+      if (valA < valB) return sortDir.value === 'asc' ? -1 : 1;
+      if (valA > valB) return sortDir.value === 'asc' ? 1 : -1;
+      return 0;
+    });
+  }
+
+  return list;
+});
 
 const showFilters = ref(window.innerWidth > 768);
 
@@ -76,6 +149,7 @@ async function fetchGangguan(p = 1) {
         per_page: perPage.value,
         search: search.value || undefined,
         status: filterStatus.value || undefined,
+        kategori: filterKategori.value || undefined,
         period: filterPeriod.value || undefined,
         jenis_gangguan: filterJenis.value || undefined,
         start_date: filterPeriod.value === 'custom' ? (filterStartDate.value || undefined) : undefined,
@@ -94,8 +168,12 @@ async function fetchGangguan(p = 1) {
 }
 
 function applySort(col) {
-  if (sortBy.value === col) sortDir.value = sortDir.value === 'asc' ? 'desc' : 'asc';
-  else { sortBy.value = col; sortDir.value = 'desc'; }
+  if (sortBy.value === col) {
+    sortDir.value = sortDir.value === 'asc' ? 'desc' : 'asc';
+  } else {
+    sortBy.value = col;
+    sortDir.value = 'desc';
+  }
   fetchGangguan(1);
 }
 function sortIcon(col) {
@@ -194,11 +272,11 @@ function openExportPreview(item) {
   printAllMode.value   = false;
   printableItems.value = [item];
   
-  baForm.value.nomorSurat = item.ticket_number || '';
+  baForm.value.nomorSurat = item.nomor_surat || '';
   baForm.value.namaPerangkat = item.kategori || '';
-  baForm.value.kode = '';
-  baForm.value.kubikal = item.kategori || '';
-  baForm.value.idTaskSip = item.ticket_number || '';
+  baForm.value.kode = item.kode || '';
+  baForm.value.kubikal = item.cubicle_name || item.kategori || '';
+  baForm.value.idTaskSip = item.id_task_sip || '';
   
   const found = cubicleList.value.find(c => c.nama === baForm.value.kubikal);
   if (found && (found.ext || found.ip)) {
@@ -485,9 +563,25 @@ function exportExcelAll() {
 }
 
 onMounted(() => {
+  if (route.query.kategori) {
+    filterKategori.value = String(route.query.kategori);
+  }
+  if (route.query.search) {
+    search.value = String(route.query.search);
+  }
+  if (route.query.status) {
+    filterStatus.value = String(route.query.status);
+  }
   fetchBaSettings();
   fetchGangguan();
   fetchCubicles();
+});
+
+watch(() => route.query, (q) => {
+  if (q.kategori !== undefined) filterKategori.value = q.kategori || '';
+  if (q.search !== undefined) search.value = q.search || '';
+  if (q.status !== undefined) filterStatus.value = q.status || '';
+  fetchGangguan(1);
 });
 </script>
 
@@ -512,7 +606,7 @@ onMounted(() => {
     <!-- Toolbar -->
     <div class="filter-toolbar">
       <div class="search-box">
-        <input v-model="search" @keyup.enter="fetchGangguan(1)" type="text" placeholder="Cari tiket, judul, agent..." />
+        <input v-model="search" @keyup.enter="fetchGangguan(1)" type="text" placeholder="Cari tiket, judul, agent, kategori..." />
         <span class="search-icon">🔍</span>
         <button @click="fetchGangguan(1)" class="search-btn">Cari</button>
       </div>
@@ -529,6 +623,10 @@ onMounted(() => {
           <option value="open">Open</option>
           <option value="in_progress">In Progress</option>
           <option value="closed">Closed</option>
+        </select>
+        <select v-model="filterKategori" @change="fetchGangguan(1)" class="filter-select">
+          <option value="">Semua Kategori</option>
+          <option v-for="kat in kategoriOptions" :key="kat" :value="kat">{{ kat }}</option>
         </select>
         <select v-model="filterJenis" @change="fetchGangguan(1)" class="filter-select">
           <option value="">Semua Jenis</option>
@@ -557,7 +655,7 @@ onMounted(() => {
         <input type="date" v-model="filterEndDate" @change="fetchGangguan(1)" class="filter-input-date" />
       </div>
 
-      <button v-show="showFilters" v-if="search || filterStatus || filterPeriod || filterJenis" @click="search='';filterStatus='';filterPeriod='';filterStartDate='';filterEndDate='';filterJenis='';fetchGangguan(1)" class="reset-btn">✕ Reset</button>
+      <button v-show="showFilters" v-if="search || filterStatus || filterKategori || filterPeriod || filterJenis" @click="search='';filterStatus='';filterKategori='';filterPeriod='';filterStartDate='';filterEndDate='';filterJenis='';fetchGangguan(1)" class="reset-btn">✕ Reset</button>
     </div>
 
     <!-- Error -->
@@ -569,7 +667,7 @@ onMounted(() => {
     </div>
 
     <!-- Tabel Format Excel (Premium) -->
-    <div v-else-if="items.length" class="card" style="grid-column:1/-1;padding:0;overflow:hidden;border:1px solid var(--border);box-shadow:0 4px 12px rgba(0,0,0,0.03);margin-bottom:24px;">
+    <div v-else-if="displayedItems.length" class="card" style="grid-column:1/-1;padding:0;overflow:hidden;border:1px solid var(--border);box-shadow:0 4px 12px rgba(0,0,0,0.03);margin-bottom:24px;">
 
       <div class="table-responsive elegant-scroll" style="overflow-x: auto; width: 100%;">
         <table style="width: 100%; border-collapse: collapse; white-space: nowrap; font-size: 0.85rem;">
@@ -594,7 +692,7 @@ onMounted(() => {
             </tr>
           </thead>
           <tbody>
-            <tr v-for="(item, index) in items" :key="item.id" class="table-row-hover"
+            <tr v-for="(item, index) in displayedItems" :key="item.id" class="table-row-hover"
               :style="`border-bottom: 1px solid #f1f5f9; ${getRowStyle(item.status)}`">
               <td class="td-center muted">{{ (page - 1) * perPage + index + 1 }}</td>
               <td class="td-base bold">{{ formatDateOnly(item.created_at) }}</td>
@@ -633,7 +731,7 @@ onMounted(() => {
       <!-- Pagination Footer -->
       <div class="pagination-wrap">
         <span class="pagination-info">
-          Menampilkan {{ (page-1)*perPage+1 }}–{{ Math.min(page*perPage, total) }} dari {{ total }} data
+          Menampilkan {{ displayedItems.length }} data{{ total ? ' (Total ' + total + ')' : '' }}
         </span>
         <div class="pagination-buttons">
           <button class="pg-btn" :disabled="page <= 1" @click="fetchGangguan(1)">«</button>
@@ -648,7 +746,7 @@ onMounted(() => {
     <div v-else class="card" style="grid-column:1/-1;text-align:center;padding:48px;color:var(--muted);">
       <div style="font-size:2.5rem;margin-bottom:8px;">📭</div>
       <p>Tidak ada data yang ditemukan.</p>
-      <button v-if="search || filterStatus || filterPeriod || filterJenis" @click="search='';filterStatus='';filterPeriod='';filterStartDate='';filterEndDate='';filterJenis='';fetchGangguan(1)"
+      <button v-if="search || filterStatus || filterKategori || filterPeriod || filterJenis" @click="search='';filterStatus='';filterKategori='';filterPeriod='';filterStartDate='';filterEndDate='';filterJenis='';fetchGangguan(1)"
         style="margin-top:12px;padding:8px 20px;border:1px solid #e2e8f0;border-radius:8px;background:#fff;cursor:pointer;font-size:0.85rem;">Reset Filter</button>
     </div>
 

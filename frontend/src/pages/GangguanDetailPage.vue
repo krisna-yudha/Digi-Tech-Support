@@ -3,6 +3,7 @@ import { onMounted, ref } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { useAuthStore } from '../stores/auth';
 import api, { API_BASE_URL } from '../services/api';
+import BeritaAcaraSpreadsheet from '../components/BeritaAcaraSpreadsheet.vue';
 
 const route  = useRoute();
 const router = useRouter();
@@ -235,6 +236,7 @@ async function fetchBaSettings() {
 
 // ───── Export PDF & Excel Berita Acara ─────
 const showPrintPreview = ref(false);
+const showSpreadsheet   = ref(false);  // jspreadsheet modal
 const cubicleList = ref([]);
 const baForm = ref({
   nomorSurat: '',
@@ -509,8 +511,14 @@ onMounted(async () => {
       <article class="card" style="grid-column:1/-1; padding: 16px 20px;">
         <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px;">
           <div>
-            <p style="margin:0 0 2px;font-size:0.75rem;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;">Nomor Tiket</p>
-            <h3 style="margin:0;font-size:1.35rem;letter-spacing:.02em;">{{ item.ticket_number }}</h3>
+            <template v-if="item.id_task_sip && item.id_task_sip !== '-'">
+              <p style="margin:0 0 2px;font-size:0.75rem;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;">Nomor Tiket / ID Task SIP</p>
+              <h3 style="margin:0;font-size:1.35rem;letter-spacing:.02em;color:var(--text-main);">{{ item.id_task_sip }}</h3>
+            </template>
+            <template v-else>
+              <p style="margin:0 0 2px;font-size:0.75rem;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;">Gangguan</p>
+              <h3 style="margin:0;font-size:1.35rem;letter-spacing:.02em;color:var(--text-main);">{{ item.judul || item.kategori || 'Detail Gangguan' }}</h3>
+            </template>
           </div>
           <div style="display:flex;gap:8px;flex-wrap:wrap;">
             <span :style="priorityStyle(item.priority)" style="padding:5px 14px;border-radius:999px;font-size:.8rem;font-weight:700;">
@@ -601,7 +609,15 @@ onMounted(async () => {
             </div>
             <div style="display: flex; justify-content: space-between; border-bottom: 1px dashed #e2e8f0; padding-bottom: 8px;">
               <span style="color: #64748b; font-weight: 600;">KATEGORI</span>
-              <span style="font-weight: 700; color: #0f172a;">{{ item.kategori || '-' }}</span>
+              <RouterLink
+                v-if="item.kategori"
+                :to="{ name: 'gangguan-list', query: { kategori: item.kategori } }"
+                style="font-weight: 700; color: #2563eb; text-decoration: underline;"
+                title="Lihat semua gangguan kategori ini"
+              >
+                {{ item.kategori }}
+              </RouterLink>
+              <span v-else style="font-weight: 700; color: #0f172a;">-</span>
             </div>
             <div style="display: flex; justify-content: space-between;">
               <span style="color: #64748b; font-weight: 600;">DITANGANI OLEH</span>
@@ -999,7 +1015,16 @@ onMounted(async () => {
 
           <div class="print-preview-footer">
             <button @click="showPrintPreview = false" style="padding: 8px 16px; background: #fff; border: 1px solid #cbd5e1; border-radius: 6px; cursor: pointer; font-weight: 600;">Batal</button>
-            <button @click="exportExcelBeritaAcara" style="padding: 8px 16px; background: #16a34a; color: #fff; border: none; border-radius: 6px; cursor: pointer; font-weight: 600;">📊 Export Excel</button>
+            <!-- <button
+              @click="exportExcelBeritaAcara"
+              style="padding: 8px 16px; background: #15803d; color: #fff; border: none; border-radius: 6px; cursor: pointer; font-weight: 600;"
+              title="Export HTML-XLS (lama)"
+            >📊 Export Excel (XLS)</button> -->
+            <button
+              @click="showSpreadsheet = true"
+              style="display:inline-flex;align-items:center;gap:6px;padding: 8px 18px; background: linear-gradient(135deg,#0369a1,#2563eb); color: #fff; border: none; border-radius: 6px; cursor: pointer; font-weight: 700; box-shadow: 0 4px 12px rgba(37,99,235,0.3);"
+              title="Buka spreadsheet interaktif jspreadsheet lalu export .xlsx"
+            >🗂️ Spreadsheet + Export .xlsx</button>
             <button @click="executePrint" style="padding: 8px 16px; background: #1d4ed8; color: #fff; border: none; border-radius: 6px; cursor: pointer; font-weight: 600;">🖨️ Cetak PDF</button>
           </div>
         </div>
@@ -1007,6 +1032,17 @@ onMounted(async () => {
 
     </template>
   </section>
+
+  <!-- ── jspreadsheet Modal ──────────────────────────────────────────────────── -->
+  <Teleport to="body">
+    <BeritaAcaraSpreadsheet
+      v-if="showSpreadsheet && item"
+      :item="item"
+      :baForm="baForm"
+      :baSettings="baSettings"
+      @close="showSpreadsheet = false"
+    />
+  </Teleport>
 </template>
 
 <style scoped>

@@ -465,7 +465,7 @@ onMounted(() => {
           <thead>
             <tr style="background-color: #f8fafc; border-bottom: 2px solid #cbd5e1;">
               <th style="padding: 12px 16px; text-align: center; font-weight: 600; color: #475569; font-size: 0.72rem; text-transform: uppercase;">No</th>
-              <th style="padding: 12px 16px; font-weight: 600; color: #475569; font-size: 0.72rem; text-transform: uppercase;">Nomor Tiket</th>
+              <th style="padding: 12px 16px; font-weight: 600; color: #475569; font-size: 0.72rem; text-transform: uppercase;">ID Task SIP</th>
               <th style="padding: 12px 16px; font-weight: 600; color: #475569; font-size: 0.72rem; text-transform: uppercase;">Tanggal</th>
               <th style="padding: 12px 16px; font-weight: 600; color: #475569; font-size: 0.72rem; text-transform: uppercase;">Kubikal</th>
               <th style="padding: 12px 16px; font-weight: 600; color: #475569; font-size: 0.72rem; text-transform: uppercase;">Subject Kendala</th>
@@ -477,7 +477,7 @@ onMounted(() => {
           <tbody>
             <tr v-for="(item, idx) in stats.gangguan_list" :key="item.id" style="border-bottom: 1px solid #f1f5f9;">
               <td style="padding: 12px 16px; text-align: center; color: #94a3b8;">{{ idx + 1 }}</td>
-              <td style="padding: 12px 16px; font-weight: 700; color: #2563eb;">{{ item.ticket_number }}</td>
+              <td style="padding: 12px 16px; font-weight: 700; color: #2563eb;">{{ item.id_task_sip || '-' }}</td>
               <td style="padding: 12px 16px; color: #334155;">{{ formatDateOnly(item.created_at) }}</td>
               <td style="padding: 12px 16px; color: #334155;">{{ item.kategori || '-' }}</td>
               <td style="padding: 12px 16px; color: #334155; max-width: 300px; overflow: hidden; text-overflow: ellipsis;" :title="item.judul">

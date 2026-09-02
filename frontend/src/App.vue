@@ -37,8 +37,14 @@ const roleLabel = computed(() => auth.primaryRole);
       <div class="container header-content">
         <!-- Logo & Title -->
         <div style="display:flex; align-items:center; gap:12px;">
-          <div style="width:36px; height:36px; border-radius:10px; background:var(--primary); display:flex; align-items:center; justify-content:center; box-shadow:0 4px 10px rgba(38,149,239,0.2);">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+          <img
+            :src="'/logo.png'"
+            alt="Logo"
+            style="width:38px; height:38px; object-fit:contain;"
+            @error="$event.target.style.display='none'; $event.target.nextElementSibling.style.display='flex';"
+          />
+          <div style="width:38px; height:38px; border-radius:10px; background:var(--primary); display:none; align-items:center; justify-content:center; box-shadow:0 4px 10px rgba(38,149,239,0.2);">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
               <path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/>
             </svg>
           </div>

@@ -29,11 +29,18 @@ class GangguanController extends Controller
         if (request()->filled('jenis_gangguan')) {
             $query->where('jenis_gangguan', request('jenis_gangguan'));
         }
+        if (request()->filled('kategori')) {
+            $query->where('kategori', request('kategori'));
+        }
         if (request()->filled('search')) {
             $q = '%' . request('search') . '%';
             $query->where(function ($w) use ($q) {
                 $w->where('judul', 'like', $q)
                   ->orWhere('ticket_number', 'like', $q)
+                  ->orWhere('id_task_sip', 'like', $q)
+                  ->orWhere('kategori', 'like', $q)
+                  ->orWhere('penyebab_permasalahan', 'like', $q)
+                  ->orWhere('penyelesaian_masalah', 'like', $q)
                   ->orWhereHas('creator', fn($r) => $r->where('name', 'like', $q));
             });
         }
@@ -239,7 +246,18 @@ class GangguanController extends Controller
         });
 
         $totalHandled = (clone $query)->count();
-        $totalClosed  = (clone $query)->where('status', 'closed')->count();
+        $totalBaTerbit = (clone $query)
+            ->whereNotNull('id_task_sip')
+            ->where('id_task_sip', '!=', '')
+            ->where('id_task_sip', '!=', '-')
+            ->whereNotNull('nomor_surat')
+            ->where('nomor_surat', '!=', '')
+            ->where('nomor_surat', '!=', '-')
+            ->whereNotNull('kode')
+            ->where('kode', '!=', '')
+            ->where('kode', '!=', '-')
+            ->count();
+        $totalClosed  = $totalBaTerbit;
         $totalActive  = (clone $query)->whereIn('status', ['open', 'in_progress'])->count();
         $avgDuration  = (clone $query)->whereNotNull('durasi')->avg('durasi');
 
@@ -253,6 +271,7 @@ class GangguanController extends Controller
             'user'                 => $user,
             'total_handled'        => $totalHandled,
             'total_closed'         => $totalClosed,
+            'total_ba_terbit'      => $totalBaTerbit,
             'total_active'         => $totalActive,
             'avg_duration_minutes' => round($avgDuration ?? 0, 1),
             'gangguan_list'        => $recentList,
