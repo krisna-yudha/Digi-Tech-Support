@@ -282,19 +282,17 @@ async function confirmImport() {
     </Transition>
   </Teleport>
 
-  <section class="card">
-    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px;">
-      <div>
-        <h2 class="page-title">Cubicles Management</h2>
-        <p style="color: var(--muted);">Kelola data ekstensi dan IP per cubicle.</p>
+  <section class="section-card card">
+    <div class="section-header-wrap">
+      <div class="desktop-sub-header">
+        <h2 class="page-title" style="margin:0 0 4px; font-size:1.35rem;">Cubicles Management</h2>
+        <p style="color: var(--muted); margin:0; font-size:0.85rem;">Kelola data ekstensi dan IP per cubicle.</p>
       </div>
-      <div>
+      <div class="sub-header-action">
         <input type="file" ref="fileInput" @change="onFileChange" accept=".csv,.txt" style="display: none;" />
-        <button class="btn-primary" @click="triggerFileInput" :disabled="uploading || previewing">
-          <span style="display:flex;align-items:center;gap:8px;">
-            <svg v-if="!uploading && !previewing" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
-            {{ uploading ? 'Mengimport...' : previewing ? 'Membaca CSV...' : 'Import CSV Cubicle' }}
-          </span>
+        <button class="btn-primary" @click="triggerFileInput" :disabled="uploading || previewing" style="width:100%; display:flex; align-items:center; justify-content:center; gap:8px;">
+          <svg v-if="!uploading && !previewing" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+          {{ uploading ? 'Mengimport...' : previewing ? 'Membaca CSV...' : 'Import CSV Cubicle' }}
         </button>
       </div>
     </div>
@@ -319,24 +317,25 @@ async function confirmImport() {
       </div>
     </div>
 
-    <div class="table-responsive">
-      <!-- Toolbar -->
-      <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-bottom:12px;">
-        <div style="position:relative;flex:1;min-width:200px;">
-          <input v-model="search" @input="page=1" type="text" placeholder="Cari nama cubicle, rochet, ext, ip..."
-            style="width:100%;padding:8px 12px 8px 34px;border:1px solid #e2e8f0;border-radius:8px;font-size:0.85rem;outline:none;background:#fff;box-sizing:border-box;">
-          <span style="position:absolute;left:10px;top:50%;transform:translateY(-50%);color:#94a3b8;">🔍</span>
-        </div>
-        <select v-model="perPage" @change="page=1"
-          style="padding:8px 12px;border:1px solid #e2e8f0;border-radius:8px;font-size:0.85rem;background:#fff;cursor:pointer;color:#334155;">
-          <option :value="10">10 / halaman</option>
-          <option :value="25">25 / halaman</option>
-          <option :value="50">50 / halaman</option>
-        </select>
-        <span style="font-size:0.8rem;color:#64748b;">Total: <strong>{{ filtered.length }}</strong> cubicle</span>
+    <!-- Toolbar -->
+    <div class="user-toolbar-wrap">
+      <div class="user-search-box">
+        <input v-model="search" @input="page=1" type="text" placeholder="Cari nama cubicle, rochet, ext, ip..." class="user-search-input">
+        <span class="user-search-icon">🔍</span>
       </div>
+      <div class="user-toolbar-sub">
+        <span class="user-count-badge">Total: <strong>{{ filtered.length }}</strong> cubicle</span>
+        <select v-model="perPage" @change="page=1" class="user-perpage-select">
+          <option :value="10">10 / hal</option>
+          <option :value="25">25 / hal</option>
+          <option :value="50">50 / hal</option>
+        </select>
+      </div>
+    </div>
 
-      <table style="width: 100%; border-collapse: collapse;">
+    <!-- Desktop Table View (>= 769px) -->
+    <div class="desktop-cubicle-table table-scroll-container elegant-scroll">
+      <table style="width: 100%; border-collapse: collapse; white-space: nowrap;">
         <thead>
         <tr style="background:#f8fafc;">
           <th class="uth" style="cursor:pointer;user-select:none;" @click="sortData('nama')">Nama Cubicle <span style="opacity:.5;font-size:.8rem;">{{ sortIcon('nama') }}</span></th>
@@ -353,28 +352,84 @@ async function confirmImport() {
           <td colspan="4" style="padding: 24px; text-align: center; color: var(--muted);">Tidak ada cubicle yang ditemukan.</td>
         </tr>
         <tr v-for="c in paged" :key="c.id" v-else style="border-bottom: 1px solid var(--border);">
-          <td style="padding: 8px 10px; font-weight: 500;">{{ c.nama }}</td>
-          <td style="padding: 8px 10px; color: var(--muted);">{{ c.rochet || '-' }}</td>
-          <td style="padding: 8px 10px; color: var(--muted);">{{ c.ext || '-' }}</td>
-          <td style="padding: 8px 10px;">
-            <code style="background: var(--bg-secondary, #f4f6fb); padding: 2px 7px; border-radius: 5px; font-size: 0.85em;">{{ c.ip || '-' }}</code>
+          <td style="padding: 10px 12px; font-weight: 600; color: #1e293b;">{{ c.nama }}</td>
+          <td style="padding: 10px 12px; color: var(--muted);">{{ c.rochet || '-' }}</td>
+          <td style="padding: 10px 12px; color: var(--muted);">{{ c.ext || '-' }}</td>
+          <td style="padding: 10px 12px;">
+            <code style="background: var(--bg-secondary, #f4f6fb); padding: 3px 8px; border-radius: 5px; font-size: 0.85em; color: #2563eb; font-weight: 600;">{{ c.ip || '-' }}</code>
           </td>
         </tr>
       </tbody>
     </table>
+    </div>
 
-      <!-- Pagination -->
-      <div v-if="lastPage > 1" style="display:flex;justify-content:space-between;align-items:center;padding:12px 4px;flex-wrap:wrap;gap:8px;">
-        <span style="font-size:0.8rem;color:#64748b;">
-          Menampilkan {{ (page-1)*perPage+1 }}–{{ Math.min(page*perPage, filtered.length) }} dari {{ filtered.length }}
-        </span>
-        <div style="display:flex;gap:4px;">
-          <button class="pg-btn" :disabled="page<=1" @click="page=1">«</button>
-          <button class="pg-btn" :disabled="page<=1" @click="page--">‹</button>
-          <button v-for="n in pageNumbers()" :key="n" class="pg-btn" :class="{'pg-active':n===page}" @click="page=n">{{ n }}</button>
-          <button class="pg-btn" :disabled="page>=lastPage" @click="page++">›</button>
-          <button class="pg-btn" :disabled="page>=lastPage" @click="page=lastPage">»</button>
+    <!-- Mobile Native Cubicle Cards (< 769px) -->
+    <div class="mobile-cubicle-list">
+      <div v-if="loading" style="padding: 32px 16px; text-align: center; color: var(--muted);">
+        Memuat data cubicle...
+      </div>
+      <div v-else-if="paged.length === 0" style="padding: 32px 16px; text-align: center; color: var(--muted);">
+        Tidak ada cubicle yang ditemukan.
+      </div>
+      <div
+        v-for="c in paged"
+        :key="'mob-c-' + c.id"
+        class="mob-cubicle-card"
+        v-else
+      >
+        <div class="mob-cubicle-header">
+          <div style="display:flex; align-items:center; gap:8px;">
+            <div class="mob-cubicle-icon">🖥️</div>
+            <h4 class="mob-cubicle-name">{{ c.nama }}</h4>
+          </div>
+          <span v-if="c.rochet" class="mob-pill-rochet">{{ c.rochet }}</span>
         </div>
+        
+        <div class="mob-cubicle-info-grid">
+          <div class="mob-info-col">
+            <span class="mob-info-lbl">Extension</span>
+            <span class="mob-info-val">{{ c.ext || '-' }}</span>
+          </div>
+          <div class="mob-info-col">
+            <span class="mob-info-lbl">IP Address</span>
+            <code class="mob-info-ip">{{ c.ip || '-' }}</code>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Pagination (Desktop & Mobile-Native Dual Mode) -->
+    <div v-if="lastPage > 1" class="user-pagination-wrap">
+      <!-- Desktop Pagination (>= 769px) -->
+      <div class="desktop-pagination-inner">
+        <span class="pagination-info-text">
+          Menampilkan <strong>{{ (page-1)*perPage+1 }}–{{ Math.min(page*perPage, filtered.length) }}</strong> dari <strong>{{ filtered.length }}</strong> cubicle
+        </span>
+        <div class="pagination-btn-group">
+          <button class="pg-btn" :disabled="page<=1" @click="page=1" title="Halaman Pertama">«</button>
+          <button class="pg-btn" :disabled="page<=1" @click="page--" title="Halaman Sebelumnya">‹</button>
+          <button v-for="n in pageNumbers()" :key="n" class="pg-btn" :class="{'pg-active':n===page}" @click="page=n">{{ n }}</button>
+          <button class="pg-btn" :disabled="page>=lastPage" @click="page++" title="Halaman Selanjutnya">›</button>
+          <button class="pg-btn" :disabled="page>=lastPage" @click="page=lastPage" title="Halaman Terakhir">»</button>
+        </div>
+      </div>
+
+      <!-- Mobile Thumb-Friendly Pagination (< 769px) -->
+      <div class="mobile-pagination-inner">
+        <button class="mob-pg-action-btn" :disabled="page<=1" @click="page--">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"></polyline></svg>
+          <span>Prev</span>
+        </button>
+
+        <div class="mob-pg-indicator">
+          <span class="mob-pg-current">Halaman <strong>{{ page }}</strong> / {{ lastPage }}</span>
+          <span class="mob-pg-total">({{ filtered.length }} cubicle)</span>
+        </div>
+
+        <button class="mob-pg-action-btn" :disabled="page>=lastPage" @click="page++">
+          <span>Next</span>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"></polyline></svg>
+        </button>
       </div>
     </div>
   </section>
@@ -384,7 +439,7 @@ async function confirmImport() {
 .uth {
   text-align: left;
   border-bottom: 1px solid var(--border);
-  padding: 10px;
+  padding: 10px 12px;
   font-size: 0.78rem;
   text-transform: uppercase;
   letter-spacing: 0.04em;
@@ -402,13 +457,286 @@ async function confirmImport() {
   font-weight: 700;
   border-bottom: 1px solid #e2e8f0;
 }
+
+/* ─── Toolbar ─── */
+.user-toolbar-wrap {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  margin-bottom: 14px;
+  flex-wrap: wrap;
+}
+.user-search-box {
+  position: relative;
+  flex: 1;
+  min-width: 220px;
+}
+.user-search-input {
+  width: 100%;
+  padding: 9px 12px 9px 36px;
+  border: 1.5px solid #e2e8f0;
+  border-radius: 10px;
+  font-size: 0.88rem;
+  outline: none;
+  background: #fff;
+  box-sizing: border-box;
+  margin: 0;
+}
+.user-search-input:focus {
+  border-color: #2563eb;
+}
+.user-search-icon {
+  position: absolute;
+  left: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: #94a3b8;
+  font-size: 0.85rem;
+}
+.user-toolbar-sub {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.user-count-badge {
+  font-size: 0.82rem;
+  color: #64748b;
+  white-space: nowrap;
+}
+.user-perpage-select {
+  padding: 8px 12px;
+  border: 1.5px solid #e2e8f0;
+  border-radius: 8px;
+  font-size: 0.84rem;
+  background: #fff;
+  cursor: pointer;
+  color: #334155;
+  margin: 0;
+  width: auto;
+}
+
+/* ─── Mobile Cards List ─── */
+.mobile-cubicle-list {
+  display: none;
+}
+
+@media (max-width: 768px) {
+  .desktop-cubicle-table {
+    display: none !important;
+  }
+  .mobile-cubicle-list {
+    display: flex !important;
+    flex-direction: column;
+    gap: 10px;
+    margin-bottom: 12px;
+  }
+  .mob-cubicle-card {
+    background: #ffffff;
+    border-radius: 12px;
+    border: 1px solid #e2e8f0;
+    box-shadow: 0 2px 6px rgba(15, 23, 42, 0.03);
+    padding: 12px 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .mob-cubicle-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .mob-cubicle-icon {
+    font-size: 1rem;
+  }
+  .mob-cubicle-name {
+    margin: 0;
+    font-size: 0.95rem;
+    font-weight: 700;
+    color: #0f172a;
+  }
+  .mob-pill-rochet {
+    font-size: 0.72rem;
+    font-weight: 700;
+    color: #2563eb;
+    background: #eff6ff;
+    padding: 2px 8px;
+    border-radius: 6px;
+    border: 1px solid #dbeafe;
+  }
+  .mob-cubicle-info-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+    background: #f8fafc;
+    padding: 8px 12px;
+    border-radius: 8px;
+  }
+  .mob-info-col {
+    display: flex;
+    flex-direction: column;
+  }
+  .mob-info-lbl {
+    font-size: 0.68rem;
+    color: #64748b;
+    font-weight: 600;
+    text-transform: uppercase;
+  }
+  .mob-info-val {
+    font-size: 0.84rem;
+    font-weight: 700;
+    color: #1e293b;
+  }
+  .mob-info-ip {
+    font-size: 0.78rem;
+    font-weight: 600;
+    color: #2563eb;
+  }
+
+  .user-toolbar-wrap {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+  }
+  .user-search-box {
+    width: 100%;
+  }
+  .user-toolbar-sub {
+    justify-content: space-between;
+    width: 100%;
+  }
+}
+.desktop-pagination-inner {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  width: 100%;
+}
+.mobile-pagination-inner {
+  display: none;
+}
+.user-pagination-wrap {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 14px 4px 4px;
+  border-top: 1px solid #f1f5f9;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 8px;
+}
+.pagination-info-text {
+  font-size: 0.82rem;
+  color: #64748b;
+}
+.pagination-btn-group {
+  display: flex;
+  gap: 5px;
+  align-items: center;
+}
 .pg-btn {
-  padding: 5px 10px; border: 1px solid #e2e8f0; border-radius: 6px;
-  background: #fff; color: #334155; font-size: 0.82rem; cursor: pointer; transition: all 0.15s; min-width: 32px;
+  min-width: 36px;
+  height: 36px;
+  padding: 0 10px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #fff;
+  color: #334155;
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  user-select: none;
 }
 .pg-btn:hover:not(:disabled) { background: #eff6ff; border-color: #93c5fd; color: #2563eb; }
 .pg-btn:disabled { opacity: 0.4; cursor: default; }
-.pg-active { background: #2563eb !important; color: #fff !important; border-color: #2563eb !important; }
+.pg-active { background: #2563eb !important; color: #fff !important; border-color: #2563eb !important; box-shadow: 0 2px 6px rgba(37, 99, 235, 0.3); }
+
+@media (max-width: 768px) {
+  .section-card {
+    background: transparent !important;
+    border: none !important;
+    box-shadow: none !important;
+    padding: 0 !important;
+  }
+  .desktop-sub-header {
+    display: none !important;
+  }
+  .sub-header-action {
+    width: 100%;
+  }
+  .section-header-wrap {
+    margin-bottom: 12px;
+  }
+  .desktop-pagination-inner {
+    display: none !important;
+  }
+  .mobile-pagination-inner {
+    display: flex !important;
+    align-items: center;
+    justify-content: space-between;
+    width: 100%;
+    gap: 8px;
+  }
+  .user-pagination-wrap {
+    background: #ffffff !important;
+    border: 1px solid #e2e8f0 !important;
+    border-radius: 14px !important;
+    padding: 10px 14px !important;
+    margin-top: 14px !important;
+    margin-bottom: 24px !important;
+    box-shadow: 0 2px 8px rgba(15, 23, 42, 0.05) !important;
+  }
+  .mob-pg-action-btn {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 8px 16px;
+    background: #f8fafc;
+    border: 1.5px solid #e2e8f0;
+    border-radius: 10px;
+    font-size: 0.85rem;
+    font-weight: 700;
+    color: #1e293b;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    user-select: none;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .mob-pg-action-btn:active:not(:disabled) {
+    background: #2563eb;
+    color: #ffffff;
+    border-color: #2563eb;
+    transform: scale(0.95);
+  }
+  .mob-pg-action-btn:disabled {
+    opacity: 0.35;
+    cursor: default;
+    background: #f1f5f9;
+  }
+  .mob-pg-indicator {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 1px;
+  }
+  .mob-pg-current {
+    font-size: 0.82rem;
+    font-weight: 600;
+    color: #0f172a;
+  }
+  .mob-pg-current strong {
+    color: #2563eb;
+    font-size: 0.95rem;
+  }
+  .mob-pg-total {
+    font-size: 0.72rem;
+    color: #64748b;
+  }
+}
 .toast-enter-active { animation: slideIn 0.3s ease; }
 .toast-leave-active { animation: slideIn 0.25s ease reverse; }
 @keyframes slideIn {
@@ -437,5 +765,29 @@ async function confirmImport() {
 @keyframes modalIn {
   from { opacity: 0; transform: scale(0.95) translateY(-20px); }
   to   { opacity: 1; transform: scale(1) translateY(0); }
+}
+
+.section-header-wrap {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.table-scroll-container {
+  width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  margin-bottom: 8px;
+  border-radius: 8px;
+}
+
+@media (max-width: 640px) {
+  .section-header-wrap {
+    flex-direction: column;
+    align-items: stretch;
+  }
 }
 </style>

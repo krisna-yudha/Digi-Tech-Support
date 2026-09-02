@@ -307,19 +307,17 @@ async function deleteUser(user) {
     </Transition>
   </Teleport>
 
-  <section class="card">
-    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px;">
-      <div>
-        <h2 class="page-title">User Management</h2>
-        <p style="color: var(--muted);">Kelola user dan role (Admin, TS, Agent).</p>
+  <section class="section-card card">
+    <div class="section-header-wrap">
+      <div class="desktop-sub-header">
+        <h2 class="page-title" style="margin:0 0 4px; font-size:1.35rem;">User Management</h2>
+        <p style="color: var(--muted); margin:0; font-size:0.85rem;">Kelola user dan role (Admin, TS, Agent).</p>
       </div>
-      <div>
+      <div class="sub-header-action">
         <input type="file" ref="fileInput" @change="onFileChange" accept=".csv,.txt" style="display: none;" />
-        <button class="btn-primary" @click="triggerFileInput" :disabled="uploading || previewing">
-          <span style="display:flex;align-items:center;gap:8px;">
-            <svg v-if="!uploading && !previewing" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
-            {{ uploading ? 'Mengimport...' : previewing ? 'Membaca CSV...' : 'Import Data Naker (CSV)' }}
-          </span>
+        <button class="btn-primary" @click="triggerFileInput" :disabled="uploading || previewing" style="width:100%; display:flex; align-items:center; justify-content:center; gap:8px;">
+          <svg v-if="!uploading && !previewing" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+          {{ uploading ? 'Mengimport...' : previewing ? 'Membaca CSV...' : 'Import Data Naker (CSV)' }}
         </button>
       </div>
     </div>
@@ -338,24 +336,25 @@ async function deleteUser(user) {
       </div>
     </div>
 
-    <div class="table-responsive">
-      <!-- Toolbar -->
-      <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-bottom:12px;">
-        <div style="position:relative;flex:1;min-width:200px;">
-          <input v-model="userSearch" @input="userPage=1" type="text" placeholder="Cari nama, jabatan, akun..."
-            style="width:100%;padding:8px 12px 8px 34px;border:1px solid #e2e8f0;border-radius:8px;font-size:0.85rem;outline:none;background:#fff;box-sizing:border-box;">
-          <span style="position:absolute;left:10px;top:50%;transform:translateY(-50%);color:#94a3b8;">🔍</span>
-        </div>
-        <select v-model="userPerPage" @change="userPage=1"
-          style="padding:8px 12px;border:1px solid #e2e8f0;border-radius:8px;font-size:0.85rem;background:#fff;cursor:pointer;color:#334155;">
-          <option :value="10">10 / halaman</option>
-          <option :value="25">25 / halaman</option>
-          <option :value="50">50 / halaman</option>
-        </select>
-        <span style="font-size:0.8rem;color:#64748b;">Total: <strong>{{ filteredUsers.length }}</strong> user</span>
+    <!-- Toolbar -->
+    <div class="user-toolbar-wrap">
+      <div class="user-search-box">
+        <input v-model="userSearch" @input="userPage=1" type="text" placeholder="Cari nama, jabatan, akun..." class="user-search-input">
+        <span class="user-search-icon">🔍</span>
       </div>
+      <div class="user-toolbar-sub">
+        <span class="user-count-badge">Total: <strong>{{ filteredUsers.length }}</strong> user</span>
+        <select v-model="userPerPage" @change="userPage=1" class="user-perpage-select">
+          <option :value="10">10 / hal</option>
+          <option :value="25">25 / hal</option>
+          <option :value="50">50 / hal</option>
+        </select>
+      </div>
+    </div>
 
-      <table style="width: 100%; border-collapse: collapse;">
+    <!-- Desktop Table View (>= 769px) -->
+    <div class="desktop-user-table table-scroll-container elegant-scroll">
+      <table style="width: 100%; border-collapse: collapse; white-space: nowrap;">
         <thead>
         <tr style="background:#f8fafc;">
           <th class="uth" style="cursor:pointer;user-select:none;" @click="sortUsers('name')">Nama <span style="opacity:.5;font-size:.8rem;">{{ sortIcon('name') }}</span></th>
@@ -374,40 +373,110 @@ async function deleteUser(user) {
           <td colspan="6" style="padding: 24px; text-align: center; color: var(--muted);">Tidak ada user yang ditemukan.</td>
         </tr>
         <tr v-for="user in pagedUsers" :key="user.id" v-else style="border-bottom: 1px solid var(--border);">
-          <td style="padding: 8px 10px; font-weight: 500;">{{ user.name }}</td>
-          <td style="padding: 8px 10px; color: var(--muted);">{{ user.gender || '-' }}</td>
-          <td style="padding: 8px 10px; color: var(--muted);">{{ user.jabatan || '-' }}</td>
-          <td style="padding: 8px 10px;">
-            <code style="background: var(--bg-secondary, #f4f6fb); padding: 2px 7px; border-radius: 5px; font-size: 0.85em;">{{ displayAccount(user.email) }}</code>
+          <td style="padding: 10px 12px; font-weight: 600; color: #1e293b;">{{ user.name }}</td>
+          <td style="padding: 10px 12px; color: var(--muted);">{{ user.gender || '-' }}</td>
+          <td style="padding: 10px 12px; color: var(--muted);">{{ user.jabatan || '-' }}</td>
+          <td style="padding: 10px 12px;">
+            <code style="background: var(--bg-secondary, #f4f6fb); padding: 3px 8px; border-radius: 5px; font-size: 0.85em; color: #2563eb; font-weight: 600;">{{ displayAccount(user.email) }}</code>
           </td>
-          <td style="padding: 8px 10px;">{{ user.roles?.map(r => r.name).join(', ') || '-' }}</td>
-          <td style="padding: 8px 10px;">
+          <td style="padding: 10px 12px;">
+            <span v-for="r in user.roles" :key="r.id" class="role-chip" :class="r.name.toLowerCase()">
+              {{ r.name }}
+            </span>
+            <span v-if="!user.roles?.length" class="role-chip default">User</span>
+          </td>
+          <td style="padding: 10px 12px;">
             <button
               @click="deleteUser(user)"
               :disabled="deleting === user.id"
-              style="background: none; border: 1px solid var(--danger, #e74c3c); color: var(--danger, #e74c3c); border-radius: 6px; padding: 4px 12px; cursor: pointer; font-size: 0.82em; transition: background 0.15s, color 0.15s;"
-              onmouseover="this.style.background='#e74c3c';this.style.color='#fff';"
-              onmouseout="this.style.background='none';this.style.color='var(--danger, #e74c3c)';"
+              class="btn-table-del"
             >
-              {{ deleting === user.id ? 'Menghapus...' : 'Hapus' }}
+              {{ deleting === user.id ? '...' : 'Hapus' }}
             </button>
           </td>
         </tr>
       </tbody>
     </table>
+    </div>
 
-      <!-- User Pagination -->
-      <div v-if="userLastPage > 1" style="display:flex;justify-content:space-between;align-items:center;padding:12px 4px;flex-wrap:wrap;gap:8px;">
-        <span style="font-size:0.8rem;color:#64748b;">
-          Menampilkan {{ (userPage-1)*userPerPage+1 }}–{{ Math.min(userPage*userPerPage, filteredUsers.length) }} dari {{ filteredUsers.length }}
-        </span>
-        <div style="display:flex;gap:4px;">
-          <button class="pg-btn" :disabled="userPage<=1" @click="userPage=1">«</button>
-          <button class="pg-btn" :disabled="userPage<=1" @click="userPage--">‹</button>
-          <button v-for="n in userPageNumbers()" :key="n" class="pg-btn" :class="{'pg-active':n===userPage}" @click="userPage=n">{{ n }}</button>
-          <button class="pg-btn" :disabled="userPage>=userLastPage" @click="userPage++">›</button>
-          <button class="pg-btn" :disabled="userPage>=userLastPage" @click="userPage=userLastPage">»</button>
+    <!-- Mobile Native User Cards (< 769px) -->
+    <div class="mobile-user-list">
+      <div v-if="loadingUsers" style="padding: 32px 16px; text-align: center; color: var(--muted);">
+        Memuat data user...
+      </div>
+      <div v-else-if="pagedUsers.length === 0" style="padding: 32px 16px; text-align: center; color: var(--muted);">
+        Tidak ada user yang ditemukan.
+      </div>
+      <div
+        v-for="user in pagedUsers"
+        :key="'mob-u-' + user.id"
+        class="mob-user-card"
+        v-else
+      >
+        <div class="mob-user-avatar">
+          {{ user.name ? user.name.charAt(0).toUpperCase() : 'U' }}
         </div>
+        <div class="mob-user-content">
+          <div class="mob-user-header">
+            <h4 class="mob-user-name">{{ user.name }}</h4>
+            <button
+              @click="deleteUser(user)"
+              :disabled="deleting === user.id"
+              class="mob-icon-del"
+              title="Hapus user"
+            >
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
+            </button>
+          </div>
+          
+          <div class="mob-user-meta-row">
+            <span class="mob-meta-account">{{ displayAccount(user.email) }}</span>
+            <span v-if="user.jabatan" class="mob-meta-tag">{{ user.jabatan }}</span>
+            <span v-if="user.gender" class="mob-meta-gender">{{ user.gender }}</span>
+          </div>
+
+          <div class="mob-user-roles">
+            <span v-for="r in user.roles" :key="r.id" class="role-chip" :class="r.name.toLowerCase()">
+              {{ r.name }}
+            </span>
+            <span v-if="!user.roles?.length" class="role-chip default">User</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- User Pagination (Desktop & Mobile-Native Dual Mode) -->
+    <div v-if="userLastPage > 1" class="user-pagination-wrap">
+      <!-- Desktop Pagination (>= 769px) -->
+      <div class="desktop-pagination-inner">
+        <span class="pagination-info-text">
+          Menampilkan <strong>{{ (userPage-1)*userPerPage+1 }}–{{ Math.min(userPage*userPerPage, filteredUsers.length) }}</strong> dari <strong>{{ filteredUsers.length }}</strong> user
+        </span>
+        <div class="pagination-btn-group">
+          <button class="pg-btn" :disabled="userPage<=1" @click="userPage=1" title="Halaman Pertama">«</button>
+          <button class="pg-btn" :disabled="userPage<=1" @click="userPage--" title="Halaman Sebelumnya">‹</button>
+          <button v-for="n in userPageNumbers()" :key="n" class="pg-btn" :class="{'pg-active':n===userPage}" @click="userPage=n">{{ n }}</button>
+          <button class="pg-btn" :disabled="userPage>=userLastPage" @click="userPage++" title="Halaman Selanjutnya">›</button>
+          <button class="pg-btn" :disabled="userPage>=userLastPage" @click="userPage=userLastPage" title="Halaman Terakhir">»</button>
+        </div>
+      </div>
+
+      <!-- Mobile Thumb-Friendly Pagination (< 769px) -->
+      <div class="mobile-pagination-inner">
+        <button class="mob-pg-action-btn" :disabled="userPage<=1" @click="userPage--">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"></polyline></svg>
+          <span>Prev</span>
+        </button>
+
+        <div class="mob-pg-indicator">
+          <span class="mob-pg-current">Halaman <strong>{{ userPage }}</strong> / {{ userLastPage }}</span>
+          <span class="mob-pg-total">({{ filteredUsers.length }} user)</span>
+        </div>
+
+        <button class="mob-pg-action-btn" :disabled="userPage>=userLastPage" @click="userPage++">
+          <span>Next</span>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"></polyline></svg>
+        </button>
       </div>
     </div>
   </section>
@@ -435,13 +504,138 @@ async function deleteUser(user) {
   font-weight: 700;
   border-bottom: 1px solid #e2e8f0;
 }
+.desktop-pagination-inner {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  width: 100%;
+}
+.mobile-pagination-inner {
+  display: none;
+}
+.user-pagination-wrap {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 14px 4px 4px;
+  border-top: 1px solid #f1f5f9;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 8px;
+}
+.pagination-info-text {
+  font-size: 0.82rem;
+  color: #64748b;
+}
+.pagination-btn-group {
+  display: flex;
+  gap: 5px;
+  align-items: center;
+}
 .pg-btn {
-  padding: 5px 10px; border: 1px solid #e2e8f0; border-radius: 6px;
-  background: #fff; color: #334155; font-size: 0.82rem; cursor: pointer; transition: all 0.15s; min-width: 32px;
+  min-width: 36px;
+  height: 36px;
+  padding: 0 10px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #fff;
+  color: #334155;
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  user-select: none;
 }
 .pg-btn:hover:not(:disabled) { background: #eff6ff; border-color: #93c5fd; color: #2563eb; }
 .pg-btn:disabled { opacity: 0.4; cursor: default; }
-.pg-active { background: #2563eb !important; color: #fff !important; border-color: #2563eb !important; }
+.pg-active { background: #2563eb !important; color: #fff !important; border-color: #2563eb !important; box-shadow: 0 2px 6px rgba(37, 99, 235, 0.3); }
+
+@media (max-width: 768px) {
+  .section-card {
+    background: transparent !important;
+    border: none !important;
+    box-shadow: none !important;
+    padding: 0 !important;
+  }
+  .desktop-sub-header {
+    display: none !important;
+  }
+  .sub-header-action {
+    width: 100%;
+  }
+  .section-header-wrap {
+    margin-bottom: 12px;
+  }
+  .desktop-pagination-inner {
+    display: none !important;
+  }
+  .mobile-pagination-inner {
+    display: flex !important;
+    align-items: center;
+    justify-content: space-between;
+    width: 100%;
+    gap: 8px;
+  }
+  .user-pagination-wrap {
+    background: #ffffff !important;
+    border: 1px solid #e2e8f0 !important;
+    border-radius: 14px !important;
+    padding: 10px 14px !important;
+    margin-top: 14px !important;
+    margin-bottom: 24px !important;
+    box-shadow: 0 2px 8px rgba(15, 23, 42, 0.05) !important;
+  }
+  .mob-pg-action-btn {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 8px 16px;
+    background: #f8fafc;
+    border: 1.5px solid #e2e8f0;
+    border-radius: 10px;
+    font-size: 0.85rem;
+    font-weight: 700;
+    color: #1e293b;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    user-select: none;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .mob-pg-action-btn:active:not(:disabled) {
+    background: #2563eb;
+    color: #ffffff;
+    border-color: #2563eb;
+    transform: scale(0.95);
+  }
+  .mob-pg-action-btn:disabled {
+    opacity: 0.35;
+    cursor: default;
+    background: #f1f5f9;
+  }
+  .mob-pg-indicator {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 1px;
+  }
+  .mob-pg-current {
+    font-size: 0.82rem;
+    font-weight: 600;
+    color: #0f172a;
+  }
+  .mob-pg-current strong {
+    color: #2563eb;
+    font-size: 0.95rem;
+  }
+  .mob-pg-total {
+    font-size: 0.72rem;
+    color: #64748b;
+  }
+}
 .toast-enter-active { animation: slideIn 0.3s ease; }
 .toast-leave-active { animation: slideIn 0.25s ease reverse; }
 @keyframes slideIn {
@@ -472,4 +666,211 @@ async function deleteUser(user) {
   to   { opacity: 1; transform: scale(1) translateY(0); }
 }
 
+/* ─── Role Chips ─── */
+.role-chip {
+  display: inline-block;
+  padding: 3px 8px;
+  border-radius: 6px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  margin-right: 4px;
+}
+.role-chip.admin { background: #fef2f2; color: #dc2626; border: 1px solid #fee2e2; }
+.role-chip.ts { background: #eff6ff; color: #2563eb; border: 1px solid #dbeafe; }
+.role-chip.agent { background: #ecfdf5; color: #059669; border: 1px solid #d1fae5; }
+.role-chip.default { background: #f1f5f9; color: #475569; }
+
+.btn-table-del {
+  background: none;
+  border: 1px solid #fee2e2;
+  color: #dc2626;
+  border-radius: 6px;
+  padding: 4px 10px;
+  cursor: pointer;
+  font-size: 0.8rem;
+  font-weight: 600;
+  transition: all 0.15s;
+}
+.btn-table-del:hover {
+  background: #dc2626;
+  color: #fff;
+}
+
+/* ─── Toolbar ─── */
+.user-toolbar-wrap {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  margin-bottom: 14px;
+  flex-wrap: wrap;
+}
+.user-search-box {
+  position: relative;
+  flex: 1;
+  min-width: 220px;
+}
+.user-search-input {
+  width: 100%;
+  padding: 9px 12px 9px 36px;
+  border: 1.5px solid #e2e8f0;
+  border-radius: 10px;
+  font-size: 0.88rem;
+  outline: none;
+  background: #fff;
+  box-sizing: border-box;
+  margin: 0;
+}
+.user-search-input:focus {
+  border-color: #2563eb;
+}
+.user-search-icon {
+  position: absolute;
+  left: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: #94a3b8;
+  font-size: 0.85rem;
+}
+.user-toolbar-sub {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.user-count-badge {
+  font-size: 0.82rem;
+  color: #64748b;
+  white-space: nowrap;
+}
+.user-perpage-select {
+  padding: 8px 12px;
+  border: 1.5px solid #e2e8f0;
+  border-radius: 8px;
+  font-size: 0.84rem;
+  background: #fff;
+  cursor: pointer;
+  color: #334155;
+  margin: 0;
+  width: auto;
+}
+
+/* ─── Mobile Cards List ─── */
+.mobile-user-list {
+  display: none;
+}
+
+@media (max-width: 768px) {
+  .desktop-user-table {
+    display: none !important;
+  }
+  .mobile-user-list {
+    display: flex !important;
+    flex-direction: column;
+    gap: 10px;
+    margin-bottom: 12px;
+  }
+  .mob-user-card {
+    background: #ffffff;
+    border-radius: 12px;
+    border: 1px solid #e2e8f0;
+    box-shadow: 0 2px 6px rgba(15, 23, 42, 0.03);
+    padding: 12px 14px;
+    display: flex;
+    gap: 12px;
+    align-items: flex-start;
+  }
+  .mob-user-avatar {
+    width: 38px;
+    height: 38px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, #3b82f6, #1d4ed8);
+    color: #fff;
+    font-weight: 800;
+    font-size: 1rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+  }
+  .mob-user-content {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .mob-user-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 8px;
+  }
+  .mob-user-name {
+    margin: 0;
+    font-size: 0.92rem;
+    font-weight: 700;
+    color: #0f172a;
+    line-height: 1.3;
+  }
+  .mob-icon-del {
+    background: #fef2f2;
+    border: 1px solid #fee2e2;
+    color: #dc2626;
+    border-radius: 8px;
+    padding: 6px 8px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+  }
+  .mob-icon-del:active {
+    background: #fecaca;
+  }
+  .mob-user-meta-row {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  .mob-meta-account {
+    font-family: monospace;
+    font-size: 0.76rem;
+    background: #f1f5f9;
+    color: #2563eb;
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-weight: 600;
+  }
+  .mob-meta-tag {
+    font-size: 0.72rem;
+    color: #475569;
+    background: #f8fafc;
+    border: 1px solid #e2e8f0;
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-weight: 600;
+  }
+  .mob-meta-gender {
+    font-size: 0.72rem;
+    color: #64748b;
+  }
+  .mob-user-roles {
+    margin-top: 2px;
+  }
+
+  .user-toolbar-wrap {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+  }
+  .user-search-box {
+    width: 100%;
+  }
+  .user-toolbar-sub {
+    justify-content: space-between;
+    width: 100%;
+  }
+}
 </style>

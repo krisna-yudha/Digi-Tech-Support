@@ -1067,6 +1067,27 @@ onMounted(async () => {
   padding: 16px 20px; border-top: 1px solid #e2e8f0; display: flex;
   justify-content: flex-end; gap: 12px; background: #fff; border-bottom-left-radius: 12px; border-bottom-right-radius: 12px;
 }
+
+@media (max-width: 768px) {
+  .print-preview-modal {
+    width: 98%;
+    max-height: 92vh;
+    border-radius: 16px;
+  }
+  .print-preview-header {
+    padding: 12px 16px;
+  }
+  .print-preview-body {
+    padding: 12px;
+  }
+  .print-preview-footer {
+    padding: 12px 16px;
+    flex-direction: column;
+  }
+  .print-preview-footer button {
+    width: 100%;
+  }
+}
 .printable-berita-acara {
   background: #fff; padding: 10px 20px; box-shadow: 0 4px 6px rgba(0,0,0,0.05); margin: 0 auto;
   color: #000; font-family: Arial, sans-serif; font-size: 8pt; width: 297mm; min-width: 297mm; box-sizing: border-box; overflow-x: hidden;

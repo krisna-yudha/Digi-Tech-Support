@@ -105,6 +105,14 @@ function getRowStyle(status) {
   return 'border-left: 4px solid #cbd5e1;';
 }
 
+function statusLabel(s) {
+  const status = String(s || '').toLowerCase();
+  if (status === 'open') return 'OPEN';
+  if (status === 'in_progress') return 'IN PROGRESS';
+  if (status === 'closed') return 'CLOSED';
+  return (s || '-').toUpperCase();
+}
+
 function formatDateOnly(v) {
   if (!v) return '-';
   return new Date(v).toLocaleDateString('id-ID', { day: '2-digit', month: 'short', year: 'numeric' });
@@ -589,18 +597,24 @@ watch(() => route.query, (q) => {
   <section class="grid" style="gap:16px;">
 
     <!-- Header -->
-    <div class="page-title-wrap" style="grid-column:1/-1; display:flex; justify-content:space-between; align-items:flex-end; flex-wrap:wrap; gap:12px;">
-      <div>
-        <h2 class="page-title">Daftar Gangguan</h2>
-        <p class="page-desc">Semua tiket gangguan yang masuk. Total: <strong>{{ total }}</strong> tiket</p>
-        <div style="display:flex; align-items:center; gap:16px; margin-top:8px; font-size:0.75rem; font-weight:600; color:#64748b;">
-          <span style="display:flex; align-items:center; gap:6px;"><span style="display:inline-block; width:8px; height:8px; border-radius:50%; background:#ef4444;"></span> Open</span>
-          <span style="display:flex; align-items:center; gap:6px;"><span style="display:inline-block; width:8px; height:8px; border-radius:50%; background:#f59e0b;"></span> In Progress</span>
-          <span style="display:flex; align-items:center; gap:6px;"><span style="display:inline-block; width:8px; height:8px; border-radius:50%; background:#10b981;"></span> Closed</span>
+    <div class="page-title-wrap" style="grid-column:1/-1;">
+      <div class="page-title-inner">
+        <div class="page-title-left">
+          <div class="page-title-icon-badge">📋</div>
+          <div>
+            <div style="display: flex; align-items: center; gap: 8px;">
+              <h2 class="page-title">Daftar Gangguan</h2>
+              <span class="badge-total-mob">{{ total }} Tiket</span>
+            </div>
+            <p class="page-desc">Semua tiket gangguan yang masuk.</p>
+          </div>
+        </div>
+        <div class="status-legend-pills">
+          <span class="legend-pill open"><span class="dot"></span> Open</span>
+          <span class="legend-pill progress"><span class="dot"></span> In Progress</span>
+          <span class="legend-pill closed"><span class="dot"></span> Closed</span>
         </div>
       </div>
-
-
     </div>
 
     <!-- Toolbar -->
@@ -666,10 +680,11 @@ watch(() => route.query, (q) => {
       Memuat data...
     </div>
 
-    <!-- Tabel Format Excel (Premium) -->
-    <div v-else-if="displayedItems.length" class="card" style="grid-column:1/-1;padding:0;overflow:hidden;border:1px solid var(--border);box-shadow:0 4px 12px rgba(0,0,0,0.03);margin-bottom:24px;">
+    <!-- Tabel Format Excel (Desktop) & Cards List (Mobile) -->
+    <div v-else-if="displayedItems.length" class="card list-container-card" style="grid-column:1/-1;padding:0;overflow:hidden;border:1px solid var(--border);box-shadow:0 4px 12px rgba(0,0,0,0.03);margin-bottom:24px;">
 
-      <div class="table-responsive elegant-scroll" style="overflow-x: auto; width: 100%;">
+      <!-- Desktop Table View (>= 769px) -->
+      <div class="desktop-table-wrap table-responsive elegant-scroll" style="overflow-x: auto; width: 100%;">
         <table style="width: 100%; border-collapse: collapse; white-space: nowrap; font-size: 0.85rem;">
           <thead>
             <tr style="background-color: #f8fafc; border-bottom: 1px solid #e2e8f0;">
@@ -728,17 +743,98 @@ watch(() => route.query, (q) => {
         </table>
       </div>
 
+      <!-- Mobile Native Card List (< 769px) -->
+      <div class="mobile-cards-wrap">
+        <div
+          v-for="item in displayedItems"
+          :key="'mob-' + item.id"
+          class="mobile-ticket-card"
+          :style="getRowStyle(item.status)"
+        >
+          <!-- Card Top: Status Badge, Category & Date -->
+          <div class="mobile-card-top">
+            <div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
+              <span class="mobile-badge-status" :class="item.status">{{ statusLabel(item.status) }}</span>
+              <span class="mobile-category-tag">{{ item.kategori || 'General' }}</span>
+              <span v-if="item.jenis_gangguan === 'Massal'" style="background:#fff1f2;color:#e11d48;font-size:0.65rem;font-weight:800;padding:2px 6px;border-radius:4px;">MASSAL</span>
+            </div>
+            <span style="font-size:0.75rem; color:#64748b; font-weight:600;">{{ formatDateOnly(item.created_at) }}</span>
+          </div>
+
+          <!-- Title & SIP -->
+          <div>
+            <h4 class="mobile-card-title">{{ item.judul || item.kategori || 'Tiket Gangguan' }}</h4>
+            <p v-if="item.id_task_sip && item.id_task_sip !== '-'" style="margin:4px 0 0;font-size:0.75rem;color:#2563eb;font-weight:700;">
+              ID Task SIP: {{ item.id_task_sip }}
+            </p>
+          </div>
+
+          <!-- Metadata Box -->
+          <div class="mobile-card-info-grid">
+            <div class="mobile-info-item">
+              <span class="mobile-info-k">Agent</span>
+              <span class="mobile-info-v">{{ item.jenis_gangguan === 'Massal' ? 'ALL AGENT' : (item.creator?.name || '-') }}</span>
+            </div>
+            <div class="mobile-info-item">
+              <span class="mobile-info-k">Petugas TS</span>
+              <span class="mobile-info-v">{{ item.assignee?.name || '-' }}</span>
+            </div>
+            <div class="mobile-info-item">
+              <span class="mobile-info-k">Start - End</span>
+              <span class="mobile-info-v">{{ formatTimeOnly(item.start_time) }} - {{ formatTimeOnly(item.end_time) }}</span>
+            </div>
+            <div class="mobile-info-item">
+              <span class="mobile-info-k">Durasi</span>
+              <span class="mobile-info-v" style="color:#2563eb;">{{ calculateDurasi(item.start_time, item.end_time) }}</span>
+            </div>
+          </div>
+
+          <!-- Action Buttons -->
+          <div class="mobile-card-actions">
+            <RouterLink :to="`/gangguan/${item.id}`" class="mobile-btn-view">
+              Lihat Detail
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 18 15 12 9 6"></polyline></svg>
+            </RouterLink>
+            <button v-if="auth.hasRole('Admin') || auth.hasRole('TS')" @click="promptDelete(item)" class="mobile-btn-del" title="Hapus">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
+            </button>
+          </div>
+        </div>
+      </div>
+
       <!-- Pagination Footer -->
+      <!-- Dual-Mode Pagination (Desktop & Mobile-Native) -->
       <div class="pagination-wrap">
-        <span class="pagination-info">
-          Menampilkan {{ displayedItems.length }} data{{ total ? ' (Total ' + total + ')' : '' }}
-        </span>
-        <div class="pagination-buttons">
-          <button class="pg-btn" :disabled="page <= 1" @click="fetchGangguan(1)">«</button>
-          <button class="pg-btn" :disabled="page <= 1" @click="fetchGangguan(page - 1)">‹</button>
-          <button v-for="n in pageNumbers()" :key="n" class="pg-btn" :class="{'pg-active': n === page}" @click="fetchGangguan(n)">{{ n }}</button>
-          <button class="pg-btn" :disabled="page >= lastPage" @click="fetchGangguan(page + 1)">›</button>
-          <button class="pg-btn" :disabled="page >= lastPage" @click="fetchGangguan(lastPage)">»</button>
+        <!-- Desktop Pagination (>= 769px) -->
+        <div class="desktop-pagination-inner">
+          <span class="pagination-info">
+            Menampilkan {{ displayedItems.length }} data{{ total ? ' (Total ' + total + ')' : '' }}
+          </span>
+          <div class="pagination-buttons">
+            <button class="pg-btn" :disabled="page <= 1" @click="fetchGangguan(1)">«</button>
+            <button class="pg-btn" :disabled="page <= 1" @click="fetchGangguan(page - 1)">‹</button>
+            <button v-for="n in pageNumbers()" :key="n" class="pg-btn" :class="{'pg-active': n === page}" @click="fetchGangguan(n)">{{ n }}</button>
+            <button class="pg-btn" :disabled="page >= lastPage" @click="fetchGangguan(page + 1)">›</button>
+            <button class="pg-btn" :disabled="page >= lastPage" @click="fetchGangguan(lastPage)">»</button>
+          </div>
+        </div>
+
+        <!-- Mobile Thumb-Friendly Pagination (< 769px) -->
+        <div class="mobile-pagination-inner">
+          <button class="mob-pg-action-btn" :disabled="page <= 1" @click="fetchGangguan(page - 1)">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"></polyline></svg>
+            <span>Prev</span>
+          </button>
+
+          <div class="mob-pg-indicator">
+            <span class="mob-pg-current">Halaman <strong>{{ page }}</strong> / {{ lastPage }}</span>
+            <span class="mob-pg-total">({{ total }} tiket)</span>
+          </div>
+
+          <button class="mob-pg-action-btn" :disabled="page >= lastPage" @click="fetchGangguan(page + 1)">
+            <span>Next</span>
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"></polyline></svg>
+          </button>
         </div>
       </div>
     </div>
@@ -960,6 +1056,46 @@ watch(() => route.query, (q) => {
 </template>
 
 <style scoped>
+.page-title-wrap {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.page-title-inner {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.page-title-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.page-title-icon-badge {
+  display: none;
+}
+.badge-total-mob {
+  display: none;
+}
+.status-legend-pills {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: #64748b;
+}
+.legend-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.legend-pill.open .dot { width: 8px; height: 8px; border-radius: 50%; background: #ef4444; display: inline-block; }
+.legend-pill.progress .dot { width: 8px; height: 8px; border-radius: 50%; background: #f59e0b; display: inline-block; }
+.legend-pill.closed .dot { width: 8px; height: 8px; border-radius: 50%; background: #10b981; display: inline-block; }
+
 .modal-overlay {
   position: fixed; top: 0; left: 0; right: 0; bottom: 0;
   background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; z-index: 9999;
@@ -1057,6 +1193,288 @@ table { border: 1px solid #cbd5e1; }
 .pg-btn:hover:not(:disabled) { background: #eff6ff; border-color: #93c5fd; color: #2563eb; }
 .pg-btn:disabled { opacity: 0.4; cursor: default; }
 .pg-active { background: #2563eb !important; color: #fff !important; border-color: #2563eb !important; }
+
+/* ─── Mobile Ticket Cards Layout ─── */
+.mobile-cards-wrap {
+  display: none;
+}
+
+@media (max-width: 768px) {
+  .page-title-wrap {
+    background: #ffffff;
+    border: 1px solid #e2e8f0;
+    border-radius: 16px;
+    padding: 14px 16px;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.03);
+    margin-bottom: 0;
+  }
+  .page-title-inner {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    width: 100%;
+  }
+  .page-title-left {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .page-title-icon-badge {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 36px;
+    height: 36px;
+    border-radius: 10px;
+    background: #eff6ff;
+    font-size: 1.15rem;
+    flex-shrink: 0;
+  }
+  .page-title {
+    font-size: 1.15rem !important;
+    font-weight: 800;
+    color: #0f172a;
+    margin: 0;
+  }
+  .badge-total-mob {
+    display: inline-block;
+    font-size: 0.7rem;
+    font-weight: 700;
+    color: #2563eb;
+    background: #eff6ff;
+    border: 1px solid #dbeafe;
+    padding: 1px 7px;
+    border-radius: 999px;
+  }
+  .page-desc {
+    font-size: 0.76rem !important;
+    color: #64748b;
+    margin: 2px 0 0 !important;
+  }
+  .status-legend-pills {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+  }
+  .legend-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 3px 8px;
+    border-radius: 999px;
+    font-size: 0.72rem;
+    font-weight: 700;
+  }
+  .legend-pill.open { background: #fef2f2; color: #dc2626; border: 1px solid #fee2e2; }
+  .legend-pill.open .dot { width: 6px; height: 6px; border-radius: 50%; background: #ef4444; }
+  .legend-pill.progress { background: #fffbeb; color: #d97706; border: 1px solid #fef3c7; }
+  .legend-pill.progress .dot { width: 6px; height: 6px; border-radius: 50%; background: #f59e0b; }
+  .legend-pill.closed { background: #ecfdf5; color: #059669; border: 1px solid #d1fae5; }
+  .legend-pill.closed .dot { width: 6px; height: 6px; border-radius: 50%; background: #10b981; }
+
+  .filter-toolbar {
+    background: #ffffff;
+    border: 1px solid #e2e8f0;
+    border-radius: 16px;
+    padding: 12px 14px;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.03);
+  }
+
+  .desktop-table-wrap {
+    display: none !important;
+  }
+  .mobile-cards-wrap {
+    display: flex !important;
+    flex-direction: column;
+    gap: 12px;
+    padding: 12px 0 0 0;
+  }
+  .list-container-card {
+    background: transparent !important;
+    border: none !important;
+    box-shadow: none !important;
+    padding: 0 !important;
+  }
+  .mobile-ticket-card {
+    background: #ffffff;
+    border-radius: 14px;
+    border: 1px solid #e2e8f0;
+    box-shadow: 0 4px 12px rgba(15, 23, 42, 0.04);
+    padding: 14px 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    transition: transform 0.15s ease;
+  }
+  .mobile-ticket-card:active {
+    transform: scale(0.99);
+  }
+  .mobile-card-top {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 8px;
+  }
+  .mobile-badge-status {
+    padding: 3px 8px;
+    border-radius: 999px;
+    font-size: 0.7rem;
+    font-weight: 800;
+    letter-spacing: 0.03em;
+  }
+  .mobile-badge-status.open { background: #fee2e2; color: #b91c1c; }
+  .mobile-badge-status.in_progress { background: #fef3c7; color: #92400e; }
+  .mobile-badge-status.closed { background: #d1fae5; color: #065f46; }
+
+  .mobile-category-tag {
+    font-size: 0.7rem;
+    font-weight: 700;
+    color: #2563eb;
+    background: #eff6ff;
+    padding: 2px 7px;
+    border-radius: 6px;
+  }
+  .mobile-card-title {
+    font-size: 0.95rem;
+    font-weight: 800;
+    color: #0f172a;
+    margin: 0;
+    line-height: 1.35;
+  }
+  .mobile-card-info-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+    background: #f8fafc;
+    padding: 10px 12px;
+    border-radius: 10px;
+  }
+  .mobile-info-item {
+    display: flex;
+    flex-direction: column;
+  }
+  .mobile-info-k {
+    color: #64748b;
+    font-size: 0.66rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  .mobile-info-v {
+    color: #1e293b;
+    font-weight: 700;
+    font-size: 0.78rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .mobile-card-actions {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    margin-top: 2px;
+  }
+  .mobile-btn-view {
+    flex: 1;
+    padding: 9px 14px;
+    background: #2563eb;
+    color: #ffffff;
+    border-radius: 10px;
+    font-weight: 700;
+    font-size: 0.82rem;
+    text-align: center;
+    text-decoration: none;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    transition: background 0.15s;
+  }
+  .mobile-btn-view:active {
+    background: #1d4ed8;
+  }
+  .mobile-btn-del {
+    padding: 9px 12px;
+    background: #fee2e2;
+    color: #dc2626;
+    border: none;
+    border-radius: 10px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .mobile-btn-del:active {
+    background: #fecaca;
+  }
+  .desktop-pagination-inner {
+    display: none !important;
+  }
+  .mobile-pagination-inner {
+    display: flex !important;
+    align-items: center;
+    justify-content: space-between;
+    width: 100%;
+    gap: 8px;
+  }
+  .pagination-wrap {
+    background: #f8fafc;
+    border: 1px solid #e2e8f0 !important;
+    border-radius: 12px;
+    padding: 8px 10px !important;
+    margin-top: 8px;
+  }
+  .mob-pg-action-btn {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 8px 14px;
+    background: #ffffff;
+    border: 1.5px solid #e2e8f0;
+    border-radius: 9px;
+    font-size: 0.84rem;
+    font-weight: 700;
+    color: #1e293b;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    user-select: none;
+    -webkit-tap-highlight-color: transparent;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+  }
+  .mob-pg-action-btn:active:not(:disabled) {
+    background: #2563eb;
+    color: #ffffff;
+    border-color: #2563eb;
+    transform: scale(0.95);
+  }
+  .mob-pg-action-btn:disabled {
+    opacity: 0.4;
+    cursor: default;
+    background: #f1f5f9;
+    box-shadow: none;
+  }
+  .mob-pg-indicator {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 1px;
+  }
+  .mob-pg-current {
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: #0f172a;
+  }
+  .mob-pg-current strong {
+    color: #2563eb;
+    font-size: 0.92rem;
+  }
+  .mob-pg-total {
+    font-size: 0.7rem;
+    color: #64748b;
+  }
+}
 
 /* Preview Modal CSS */
 .print-preview-overlay {

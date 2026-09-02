@@ -89,13 +89,16 @@ onMounted(fetchSummary);
 </script>
 
 <template>
-  <section style="display:flex; flex-direction:column; gap:24px;">
+  <section class="dashboard-page-wrap">
 
     <!-- Header -->
-    <div style="display:flex; justify-content:space-between; align-items:flex-end; border-bottom: 1px solid #e2e8f0; padding-bottom: 16px;">
-      <div>
-        <h2 style="margin:0 0 4px; font-size: 1.75rem; font-weight: 800; color: #0f172a;">Dashboard Overview</h2>
-        <p style="margin:0; font-size: 0.95rem; color: #64748b;">Selamat Datang, <b>{{ auth.user?.name || 'User' }}</b> 👋. Berikut adalah ringkasan status sistem.</p>
+    <div class="dash-header-card">
+      <div class="dash-header-inner">
+        <div class="dash-icon-badge">📊</div>
+        <div>
+          <h2 class="dash-title">Dashboard Overview</h2>
+          <p class="dash-subtitle">Selamat Datang, <b>{{ auth.user?.name || 'User' }}</b> 👋 &bull; Ringkasan status sistem.</p>
+        </div>
       </div>
     </div>
 
@@ -215,7 +218,7 @@ onMounted(fetchSummary);
 <style scoped>
 .corp-stat-card {
   background: white; 
-  padding: 24px; 
+  padding: 22px; 
   border-radius: 16px; 
   box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05), 0 2px 4px -1px rgba(0,0,0,0.03); 
   border: 1px solid #f1f5f9; 
@@ -229,8 +232,8 @@ onMounted(fetchSummary);
   box-shadow: 0 10px 15px -3px rgba(0,0,0,0.05), 0 4px 6px -2px rgba(0,0,0,0.025);
 }
 .corp-stat-icon {
-  width: 56px; 
-  height: 56px; 
+  width: 54px; 
+  height: 54px; 
   border-radius: 14px; 
   display: flex; 
   align-items: center; 
@@ -239,7 +242,7 @@ onMounted(fetchSummary);
 }
 .corp-stat-label {
   margin: 0; 
-  font-size: 0.85rem; 
+  font-size: 0.82rem; 
   font-weight: 700; 
   color: #64748b; 
   text-transform: uppercase; 
@@ -247,7 +250,7 @@ onMounted(fetchSummary);
 }
 .corp-stat-value {
   margin: 4px 0 0; 
-  font-size: 1.8rem; 
+  font-size: 1.75rem; 
   font-weight: 800; 
   color: #0f172a;
 }
@@ -266,5 +269,97 @@ onMounted(fetchSummary);
   margin: 0; 
   border-bottom: 1px solid #f1f5f9; 
   padding-bottom: 12px;
+}
+
+.dashboard-page-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.dash-header-card {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  border-bottom: 1px solid #e2e8f0;
+  padding-bottom: 16px;
+}
+
+.dash-header-inner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.dash-icon-badge {
+  display: none;
+}
+
+.dash-title {
+  margin: 0 0 4px;
+  font-size: 1.75rem;
+  font-weight: 800;
+  color: #0f172a;
+}
+
+.dash-subtitle {
+  margin: 0;
+  font-size: 0.95rem;
+  color: #64748b;
+}
+
+@media (max-width: 768px) {
+  .dash-header-card {
+    background: #ffffff;
+    border: 1px solid #e2e8f0;
+    border-radius: 16px;
+    padding: 14px 16px;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.03);
+    margin-bottom: 0;
+  }
+  .dash-icon-badge {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 36px;
+    height: 36px;
+    border-radius: 10px;
+    background: #eff6ff;
+    font-size: 1.15rem;
+    flex-shrink: 0;
+  }
+  .dash-title {
+    font-size: 1.15rem !important;
+    margin: 0 !important;
+  }
+  .dash-subtitle {
+    font-size: 0.76rem !important;
+    margin-top: 2px !important;
+  }
+  .corp-stat-card {
+    padding: 14px 16px;
+    border-radius: 14px;
+    gap: 12px;
+  }
+  .corp-stat-icon {
+    width: 44px;
+    height: 44px;
+    border-radius: 10px;
+  }
+  .corp-stat-icon svg {
+    width: 20px;
+    height: 20px;
+  }
+  .corp-stat-label {
+    font-size: 0.72rem;
+  }
+  .corp-stat-value {
+    font-size: 1.4rem;
+  }
+  .corp-chart-card {
+    padding: 16px;
+    grid-column: span 1 !important;
+    border-radius: 14px;
+  }
 }
 </style>

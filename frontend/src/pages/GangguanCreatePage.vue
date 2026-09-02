@@ -60,9 +60,69 @@ function handleCubicleFocus() {
   }
 }
 
+// ─── Custom Searchable Select for Agent ───
+const agentSearch    = ref(auth.user?.name || '');
+const isAgentOpen    = ref(false);
+const agentSelectRef = ref(null);
+
+const filteredAgents = computed(() => {
+  if (form.is_massal) return [{ id: 0, name: 'ALL AGENT' }];
+  const q = agentSearch.value.toLowerCase().trim();
+  if (!q) return agents.value;
+  return agents.value.filter(a =>
+    a.name?.toLowerCase().includes(q) ||
+    a.email?.toLowerCase().includes(q) ||
+    a.jabatan?.toLowerCase().includes(q)
+  );
+});
+
+function selectAgent(a) {
+  if (typeof a === 'string') {
+    form.agent_name = a;
+    agentSearch.value = a;
+  } else {
+    form.agent_name = a.name;
+    agentSearch.value = a.name + (a.jabatan ? ` (${a.jabatan})` : '');
+  }
+  isAgentOpen.value = false;
+}
+
+function handleAgentFocus() {
+  if (!form.is_massal) {
+    isAgentOpen.value = true;
+  }
+}
+
+// ─── Custom Select for Kategori ───
+const kategoriList = [
+  'SYSCCA',
+  'SYSCCAE',
+  'ICRM+',
+  'HARDWARE',
+  'BOTIKA',
+  'ICONNPAY',
+  'SIP',
+  'INTERNET',
+  'LOCAL NETWORK',
+  'MICROSIP'
+];
+const isKategoriOpen    = ref(false);
+const kategoriSelectRef = ref(null);
+
+function selectKategori(kat) {
+  form.kategori = kat;
+  isKategoriOpen.value = false;
+}
+
 function handleClickOutside(e) {
   if (cubicleSelectRef.value && !cubicleSelectRef.value.contains(e.target)) {
     isCubicleOpen.value = false;
+  }
+  if (agentSelectRef.value && !agentSelectRef.value.contains(e.target)) {
+    isAgentOpen.value = false;
+  }
+  if (kategoriSelectRef.value && !kategoriSelectRef.value.contains(e.target)) {
+    isKategoriOpen.value = false;
   }
 }
 // ─────────────────────────────────────────────
@@ -79,11 +139,13 @@ watch(() => form.is_massal, (val) => {
     form.custom_cubicle = 'MASSAL';
     form.agent_name = 'ALL AGENT';
     cubicleSearch.value = 'MASSAL';
+    agentSearch.value = 'ALL AGENT';
   } else {
     form.cubicle = '';
     form.custom_cubicle = '';
-    form.agent_name = '';
+    form.agent_name = auth.hasRole('Agent') ? (auth.user?.name || '') : '';
     cubicleSearch.value = '';
+    agentSearch.value = auth.hasRole('Agent') ? (auth.user?.name || '') : '';
   }
 });
 
@@ -186,30 +248,42 @@ async function submit() {
 </script>
 
 <template>
-  <section style="max-width: 760px; margin: 0 auto; padding: 10px 0 30px;">
+  <section class="create-page-wrap">
     <!-- Page Header -->
-    <div style="margin-bottom: 24px; text-align: left;">
-      <h2 class="page-title" style="font-size: 1.5rem; font-weight: 800; color: #0f172a; margin-bottom: 4px;">Tambah Gangguan</h2>
-      <p style="color: var(--muted); font-size: 0.9rem; margin: 0;">Isi form berikut untuk melaporkan kendala operasional secara cepat.</p>
+    <div class="create-header-card">
+      <div class="create-header-inner">
+        <div class="create-icon-badge">📝</div>
+        <div>
+          <h2 class="create-title">Tambah Gangguan</h2>
+          <p class="create-subtitle">Isi form berikut untuk melaporkan kendala operasional secara cepat.</p>
+        </div>
+      </div>
     </div>
 
     <!-- Main Card -->
-    <div class="card" style="padding: 28px; border-radius: 16px; box-shadow: 0 10px 25px -5px rgba(0,0,0,0.05); border: 1px solid #e2e8f0; background: #ffffff;">
+    <div class="card form-main-card">
       <form style="display: flex; flex-direction: column; gap: 24px;" @submit.prevent="submit">
 
-        <!-- Opsi Gangguan Massal (Toggle Switch Box) -->
-        <div v-if="auth.hasRole('TS') || auth.hasRole('Admin')" class="massal-card">
-          <label style="display: flex; align-items: center; gap: 12px; cursor: pointer; margin: 0; width: 100%;">
-            <input type="checkbox" id="is_massal" v-model="form.is_massal" class="custom-checkbox" />
-            <div>
-              <div style="font-weight: 700; font-size: 0.95rem; color: #92400e;">
-                ⚠️ Input sebagai Gangguan Massal (Semua Agent/Area)
-              </div>
-              <div style="font-size: 0.8rem; color: #b45309; margin-top: 2px;">
-                Centang jika gangguan berdampak secara menyeluruh pada semua cubicle & agent.
-              </div>
+        <!-- Opsi Gangguan Massal (Modern Mobile Switch Card) -->
+        <div 
+          v-if="auth.hasRole('TS') || auth.hasRole('Admin')" 
+          class="massal-card" 
+          :class="{ 'massal-active': form.is_massal }" 
+          @click="form.is_massal = !form.is_massal"
+        >
+          <div class="massal-card-left">
+            <span class="massal-icon">⚠️</span>
+            <div class="massal-text-wrap">
+              <div class="massal-title">Input sebagai Gangguan Massal (Semua Agent)</div>
+              <div class="massal-desc">Aktifkan jika gangguan berdampak menyeluruh pada semua cubicle & agent.</div>
             </div>
-          </label>
+          </div>
+          
+          <div class="toggle-switch-wrap">
+            <div class="toggle-switch" :class="{ on: form.is_massal }">
+              <div class="toggle-switch-handle"></div>
+            </div>
+          </div>
         </div>
 
         <!-- 2-Column Grid Layout -->
@@ -281,11 +355,13 @@ async function submit() {
             </div>
           </div>
 
-          <!-- Field 2: Nama Agent -->
-          <div>
-            <label for="agent_name" style="display: block; margin-bottom: 8px; font-weight: 600; font-size: 0.88rem; color: #334155;">
+          <!-- Field 2: Searchable Nama Agent -->
+          <div ref="agentSelectRef" style="position: relative;">
+            <label style="display: block; margin-bottom: 8px; font-weight: 600; font-size: 0.88rem; color: #334155;">
               Nama Agent <span style="color: var(--danger, #ef4444);">*</span>
             </label>
+
+            <!-- Disabled input for Agent role -->
             <input 
               v-if="auth.hasRole('Agent')" 
               id="agent_name" 
@@ -295,18 +371,55 @@ async function submit() {
               disabled 
               class="form-input disabled-input"
             />
-            <select 
-              v-else 
-              id="agent_name" 
-              v-model="form.agent_name" 
-              required 
-              :disabled="form.is_massal"
-              class="form-input"
-            >
-              <option value="" disabled>Pilih Agent</option>
-              <option v-if="form.is_massal" value="ALL AGENT">ALL AGENT</option>
-              <option v-for="agent in agents" :key="agent.id" :value="agent.name">{{ agent.name }}</option>
-            </select>
+
+            <!-- Searchable Input for TS / Admin -->
+            <div v-else style="position: relative;">
+              <input 
+                type="text" 
+                v-model="agentSearch"
+                @focus="handleAgentFocus"
+                @input="isAgentOpen = true"
+                placeholder="Cari / Pilih Nama Agent..." 
+                required
+                :disabled="form.is_massal"
+                class="form-input"
+                style="width: 100%; padding-right: 36px; box-sizing: border-box;"
+              />
+              <span 
+                @click="!form.is_massal && (isAgentOpen = !isAgentOpen)"
+                style="position: absolute; right: 12px; top: 50%; transform: translateY(-50%); color: #94a3b8; cursor: pointer; font-size: 0.8rem;"
+              >
+                ▼
+              </span>
+
+              <!-- Custom Dropdown List for Agents -->
+              <div 
+                v-if="isAgentOpen && !form.is_massal" 
+                class="dropdown-menu elegant-scroll"
+              >
+                <div 
+                  v-if="filteredAgents.length === 0" 
+                  style="padding: 10px 14px; color: #94a3b8; font-size: 0.85rem; text-align: center;"
+                >
+                  Tidak ada agent yang sesuai.
+                </div>
+                
+                <div 
+                  v-for="a in filteredAgents" 
+                  :key="a.id" 
+                  class="dropdown-item"
+                  :class="{ selected: form.agent_name === a.name }"
+                  @click="selectAgent(a)"
+                >
+                  <span style="font-weight: 600; color: #1e293b;">{{ a.name }}</span>
+                  <span v-if="a.jabatan || a.email" style="font-size: 0.78rem; color: #64748b; margin-left: 8px;">
+                    <template v-if="a.jabatan">{{ a.jabatan }}</template>
+                    <template v-if="a.jabatan && a.email"> · </template>
+                    <template v-if="a.email">{{ a.email.split('@')[0] }}</template>
+                  </span>
+                </div>
+              </div>
+            </div>
           </div>
 
           <!-- Field 3: Custom Cubicle Input (Conditional) -->
@@ -325,24 +438,46 @@ async function submit() {
             />
           </div>
 
-          <!-- Field 4: Kategori Gangguan -->
-          <div>
-            <label for="kategori" style="display: block; margin-bottom: 8px; font-weight: 600; font-size: 0.88rem; color: #334155;">
+          <!-- Field 4: Custom Kategori Gangguan Select -->
+          <div ref="kategoriSelectRef" style="position: relative;">
+            <label style="display: block; margin-bottom: 8px; font-weight: 600; font-size: 0.88rem; color: #334155;">
               Kategori Gangguan <span style="color: var(--danger, #ef4444);">*</span>
             </label>
-            <select id="kategori" v-model="form.kategori" required class="form-input">
-              <option value="" disabled>Pilih Kategori Gangguan</option>
-              <option value="SYSCCA">SYSCCA</option>
-              <option value="SYSCCAE">SYSCCAE</option>
-              <option value="ICRM+">ICRM+</option>
-              <option value="HARDWARE">HARDWARE</option>
-              <option value="BOTIKA">BOTIKA</option>
-              <option value="ICONNPAY">ICONNPAY</option>
-              <option value="SIP">SIP</option>
-              <option value="INTERNET">INTERNET</option>
-              <option value="LOCAL NETWORK">LOCAL NETWORK</option>
-              <option value="MICROSIP">MICROSIP</option>
-            </select>
+
+            <div style="position: relative;">
+              <input 
+                type="text" 
+                readonly
+                :value="form.kategori"
+                @click="isKategoriOpen = !isKategoriOpen"
+                placeholder="Pilih Kategori Gangguan..." 
+                required
+                class="form-input"
+                style="width: 100%; padding-right: 36px; box-sizing: border-box; cursor: pointer; background: #ffffff;"
+              />
+              <span 
+                @click="isKategoriOpen = !isKategoriOpen"
+                style="position: absolute; right: 12px; top: 50%; transform: translateY(-50%); color: #94a3b8; cursor: pointer; font-size: 0.8rem; pointer-events: none;"
+              >
+                ▼
+              </span>
+
+              <!-- Custom Dropdown Menu for Kategori -->
+              <div 
+                v-if="isKategoriOpen" 
+                class="dropdown-menu elegant-scroll"
+              >
+                <div 
+                  v-for="kat in kategoriList" 
+                  :key="kat" 
+                  class="dropdown-item"
+                  :class="{ selected: form.kategori === kat }"
+                  @click="selectKategori(kat)"
+                >
+                  <span style="font-weight: 600; color: #1e293b;">{{ kat }}</span>
+                </div>
+              </div>
+            </div>
           </div>
 
         </div>
@@ -409,15 +544,14 @@ async function submit() {
         <div v-if="error" class="alert alert-danger" style="padding: 12px 16px; border-radius: 8px; font-size: 0.9rem;">{{ error }}</div>
 
         <!-- Form Buttons -->
-        <div style="display: flex; gap: 12px; justify-content: flex-end; margin-top: 8px; padding-top: 16px; border-top: 1px solid #f1f5f9;">
-          <button type="button" class="btn-ghost" @click="$router.back()" style="padding: 10px 20px; font-weight: 600;">
+        <div class="form-buttons-wrap">
+          <button type="button" class="btn-ghost btn-cancel" @click="$router.back()">
             Batal
           </button>
           <button 
             type="submit" 
-            class="btn-primary" 
+            class="btn-primary btn-submit" 
             :disabled="loading"
-            style="padding: 10px 24px; font-weight: 700; box-shadow: 0 4px 12px rgba(37, 99, 235, 0.25);"
           >
             {{ loading ? 'Menyimpan...' : 'Kirim Laporan' }}
           </button>
@@ -429,31 +563,198 @@ async function submit() {
 </template>
 
 <style scoped>
-.form-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 20px;
+.create-page-wrap {
+  max-width: 760px;
+  margin: 0 auto;
+  padding: 10px 0 30px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
 }
 
-@media (max-width: 640px) {
+.create-header-card {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.create-header-inner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.create-icon-badge {
+  display: none;
+}
+
+.create-title {
+  font-size: 1.5rem;
+  font-weight: 800;
+  color: #0f172a;
+  margin: 0;
+}
+
+.create-subtitle {
+  color: var(--muted, #64748b);
+  font-size: 0.9rem;
+  margin: 3px 0 0;
+}
+
+.form-main-card {
+  padding: 28px;
+  border-radius: 16px;
+  box-shadow: 0 10px 25px -5px rgba(0,0,0,0.05);
+  border: 1px solid #e2e8f0;
+  background: #ffffff;
+}
+
+@media (max-width: 768px) {
+  .create-header-card {
+    background: #ffffff;
+    border: 1px solid #e2e8f0;
+    border-radius: 16px;
+    padding: 14px 16px;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.03);
+  }
+  .create-icon-badge {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 36px;
+    height: 36px;
+    border-radius: 10px;
+    background: #eff6ff;
+    font-size: 1.15rem;
+    flex-shrink: 0;
+  }
+  .create-title {
+    font-size: 1.15rem;
+  }
+  .create-subtitle {
+    font-size: 0.76rem;
+  }
+  .form-main-card {
+    padding: 18px 16px !important;
+    border-radius: 14px !important;
+  }
   .form-grid {
     grid-template-columns: 1fr;
+    gap: 14px;
+  }
+  .form-buttons-wrap {
+    flex-direction: column-reverse;
+  }
+  .btn-cancel, .btn-submit {
+    width: 100%;
+    padding: 12px;
+    font-size: 0.92rem;
   }
 }
 
+/* ─── Massal Toggle Switch Card ─── */
 .massal-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
   padding: 14px 18px;
   background: #fffbeb;
-  border: 1px solid #fde68a;
-  border-radius: 10px;
+  border: 1.5px solid #fde68a;
+  border-radius: 14px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
 }
 
-.custom-checkbox {
-  width: 20px;
-  height: 20px;
-  margin: 0;
-  cursor: pointer;
-  accent-color: #d97706;
+.massal-card:hover {
+  border-color: #f59e0b;
+  background: #fef3c7;
+}
+
+.massal-card.massal-active {
+  background: #fff7ed;
+  border-color: #f97316;
+  box-shadow: 0 4px 14px rgba(249, 115, 22, 0.12);
+}
+
+.massal-card-left {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.massal-icon {
+  font-size: 1.25rem;
+  line-height: 1.2;
+  flex-shrink: 0;
+}
+
+.massal-text-wrap {
+  display: flex;
+  flex-direction: column;
+}
+
+.massal-title {
+  font-weight: 700;
+  font-size: 0.95rem;
+  color: #92400e;
+  line-height: 1.3;
+}
+
+.massal-desc {
+  font-size: 0.8rem;
+  color: #b45309;
+  margin-top: 3px;
+  line-height: 1.4;
+}
+
+/* ─── iOS / Android Toggle Switch ─── */
+.toggle-switch-wrap {
+  flex-shrink: 0;
+}
+
+.toggle-switch {
+  width: 48px;
+  height: 26px;
+  background: #cbd5e1;
+  border-radius: 999px;
+  padding: 2px;
+  position: relative;
+  transition: background-color 0.25s ease;
+  box-sizing: border-box;
+}
+
+.toggle-switch.on {
+  background: #f59e0b;
+}
+
+.toggle-switch-handle {
+  width: 22px;
+  height: 22px;
+  background: #ffffff;
+  border-radius: 50%;
+  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.2);
+  transition: transform 0.25s ease;
+  transform: translateX(0);
+}
+
+.toggle-switch.on .toggle-switch-handle {
+  transform: translateX(22px);
+}
+
+@media (max-width: 640px) {
+  .massal-card {
+    padding: 12px 14px;
+    gap: 10px;
+  }
+  .massal-title {
+    font-size: 0.88rem;
+  }
+  .massal-desc {
+    font-size: 0.75rem;
+  }
 }
 
 .form-input {
