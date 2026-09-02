@@ -1,5 +1,5 @@
 <script setup>
-import { ref, onMounted } from 'vue';
+import { ref, onMounted, computed } from 'vue';
 import api from '../services/api';
 import { useAuthStore } from '../stores/auth';
 
@@ -12,9 +12,20 @@ const msg     = ref('');
 const stats = ref({
   total_handled: 0,
   total_closed: 0,
+  total_ba_terbit: 0,
   total_active: 0,
   avg_duration_minutes: 0,
   gangguan_list: [],
+});
+
+const totalBaDiselesaikan = computed(() => {
+  const list = stats.value?.gangguan_list || [];
+  return list.filter(item => {
+    const hasIdSip = Boolean(item.id_task_sip && String(item.id_task_sip).trim() !== '' && String(item.id_task_sip).trim() !== '-');
+    const hasNomorSurat = Boolean(item.nomor_surat && String(item.nomor_surat).trim() !== '' && String(item.nomor_surat).trim() !== '-');
+    const hasKode = Boolean(item.kode && String(item.kode).trim() !== '' && String(item.kode).trim() !== '-');
+    return hasIdSip && hasNomorSurat && hasKode;
+  }).length;
 });
 
 // State User Signature
@@ -405,10 +416,10 @@ onMounted(() => {
           Berita Acara Diselesaikan
         </div>
         <div style="font-size: 2rem; font-weight: 800; color: #15803d;">
-          {{ loading ? '...' : stats.total_closed }}
+          {{ loading ? '...' : totalBaDiselesaikan }}
         </div>
         <div style="font-size: 0.75rem; color: #166534; margin-top: 4px;">
-          Gangguan berstatus CLOSED (Terbit BA)
+          Memiliki ID SIP, No Dokumen &amp; Kode
         </div>
       </div>
 
