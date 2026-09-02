@@ -103,9 +103,9 @@ onMounted(fetchSummary);
     </div>
 
     <!-- Status Stats -->
-    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 20px;">
+    <div class="dash-stats-grid">
       <template v-if="loading">
-        <div v-for="i in 6" :key="i" style="background:#fff; border-radius:12px; height:100px; animation:pulse 1.2s infinite alternate; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05); border: 1px solid #f1f5f9;"></div>
+        <div v-for="i in 6" :key="i" class="dash-stat-skeleton"></div>
       </template>
 
       <template v-else-if="summary">
@@ -114,7 +114,7 @@ onMounted(fetchSummary);
           <div class="corp-stat-icon" style="background: #eff6ff; color: #3b82f6;">
             <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="currentColor" viewBox="0 0 24 24"><path d="M20 4H4c-1.11 0-1.99.89-1.99 2L2 18c0 1.11.89 2 2 2h16c1.11 0 2-.89 2-2V6c0-1.11-.89-2-2-2zm0 14H4V6h16v12zm-9-1h2v-2h-2v2zm0-4h2V7h-2v6z"/></svg>
           </div>
-          <div>
+          <div class="corp-stat-content">
             <p class="corp-stat-label">Total Tiket</p>
             <h3 class="corp-stat-value">{{ summary.total ?? 0 }}</h3>
           </div>
@@ -125,7 +125,7 @@ onMounted(fetchSummary);
           <div class="corp-stat-icon" style="background: #fef2f2; color: #ef4444;">
             <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="currentColor" viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/></svg>
           </div>
-          <div>
+          <div class="corp-stat-content">
             <p class="corp-stat-label">Open</p>
             <h3 class="corp-stat-value">{{ summary.open ?? 0 }}</h3>
           </div>
@@ -136,7 +136,7 @@ onMounted(fetchSummary);
           <div class="corp-stat-icon" style="background: #fffbeb; color: #f59e0b;">
             <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="currentColor" viewBox="0 0 24 24"><path d="M11.99 2C6.47 2 2 6.48 2 12s4.47 10 9.99 10C17.52 22 22 17.52 22 12S17.52 2 11.99 2zM12 20c-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8-3.58 8-8 8zm.5-13H11v6l5.25 3.15.75-1.23-4.5-2.67z"/></svg>
           </div>
-          <div>
+          <div class="corp-stat-content">
             <p class="corp-stat-label">In Progress</p>
             <h3 class="corp-stat-value">{{ summary.in_progress ?? 0 }}</h3>
           </div>
@@ -147,7 +147,7 @@ onMounted(fetchSummary);
           <div class="corp-stat-icon" style="background: #ecfdf5; color: #10b981;">
             <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="currentColor" viewBox="0 0 24 24"><path d="M9 16.2L4.8 12l-1.4 1.4L9 19 21 7l-1.4-1.4L9 16.2z"/></svg>
           </div>
-          <div>
+          <div class="corp-stat-content">
             <p class="corp-stat-label">Closed</p>
             <h3 class="corp-stat-value">{{ summary.closed ?? 0 }}</h3>
           </div>
@@ -158,8 +158,8 @@ onMounted(fetchSummary);
           <div class="corp-stat-icon" style="background: #fdf4ff; color: #d946ef;">
             <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="currentColor" viewBox="0 0 24 24"><path d="M11.99 2C6.47 2 2 6.48 2 12s4.47 10 9.99 10C17.52 22 22 17.52 22 12S17.52 2 11.99 2zM12 20c-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8-3.58 8-8 8zm1-13h-2v5l4.28 2.54.72-1.21-3-1.78z"/></svg>
           </div>
-          <div>
-            <p class="corp-stat-label">Total Waktu Kendala</p>
+          <div class="corp-stat-content">
+            <p class="corp-stat-label">Total Waktu</p>
             <h3 class="corp-stat-value">{{ formatDurasi(summary.total_downtime) }}</h3>
           </div>
         </div>
@@ -169,7 +169,7 @@ onMounted(fetchSummary);
           <div class="corp-stat-icon" style="background: #eef2ff; color: #6366f1;">
             <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="currentColor" viewBox="0 0 24 24"><path d="M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5c-1.66 0-3 1.34-3 3s1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5C6.34 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z"/></svg>
           </div>
-          <div>
+          <div class="corp-stat-content">
             <p class="corp-stat-label">Agent Terdampak</p>
             <h3 class="corp-stat-value">{{ summary.total_agent_terdampak ?? 0 }}</h3>
           </div>
@@ -178,7 +178,7 @@ onMounted(fetchSummary);
     </div>
 
     <!-- Informative Data -->
-    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 24px;" v-if="summary && !loading">
+    <div class="dash-charts-grid" v-if="summary && !loading">
       
       <!-- By Status -->
       <div class="corp-chart-card">
@@ -253,6 +253,27 @@ onMounted(fetchSummary);
   font-size: 1.75rem; 
   font-weight: 800; 
   color: #0f172a;
+}
+
+.dash-stats-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 20px;
+}
+
+.dash-stat-skeleton {
+  background: #fff;
+  border-radius: 12px;
+  height: 100px;
+  animation: pulse 1.2s infinite alternate;
+  box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05);
+  border: 1px solid #f1f5f9;
+}
+
+.dash-charts-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 24px;
 }
 
 .corp-chart-card {
@@ -336,28 +357,40 @@ onMounted(fetchSummary);
     font-size: 0.76rem !important;
     margin-top: 2px !important;
   }
+  .dash-stats-grid {
+    grid-template-columns: repeat(2, 1fr) !important;
+    gap: 10px !important;
+  }
   .corp-stat-card {
-    padding: 14px 16px;
-    border-radius: 14px;
-    gap: 12px;
+    padding: 12px 10px;
+    border-radius: 12px;
+    gap: 8px;
+    flex-direction: column;
+    align-items: flex-start;
   }
   .corp-stat-icon {
-    width: 44px;
-    height: 44px;
-    border-radius: 10px;
+    width: 36px;
+    height: 36px;
+    border-radius: 8px;
   }
   .corp-stat-icon svg {
-    width: 20px;
-    height: 20px;
+    width: 18px;
+    height: 18px;
   }
   .corp-stat-label {
-    font-size: 0.72rem;
+    font-size: 0.68rem;
+    letter-spacing: 0.02em;
   }
   .corp-stat-value {
-    font-size: 1.4rem;
+    font-size: 1.25rem;
+    margin-top: 2px;
+  }
+  .dash-charts-grid {
+    grid-template-columns: 1fr !important;
+    gap: 14px !important;
   }
   .corp-chart-card {
-    padding: 16px;
+    padding: 14px 16px;
     grid-column: span 1 !important;
     border-radius: 14px;
   }

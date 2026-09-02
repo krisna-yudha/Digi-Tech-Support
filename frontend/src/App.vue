@@ -9,20 +9,20 @@ const showNav = computed(() => route.name !== 'login');
 
 const navItems = computed(() => {
   if (auth.hasRole('Admin')) return [
-    { to: '/dashboard', label: 'Dashboard', icon: 'dashboard' },
-    { to: '/gangguan',  label: 'Gangguan',  icon: 'gangguan'  },
-    { to: '/gangguan/create', label: 'Input Gangguan', icon: 'create', isPrimary: true },
-    { to: '/settings',  label: 'Settings',  icon: 'settings'  },
+    { to: '/dashboard', label: 'Dashboard', mobileLabel: 'Dashboard', icon: 'dashboard' },
+    { to: '/gangguan',  label: 'Gangguan',  mobileLabel: 'Gangguan',  icon: 'gangguan'  },
+    { to: '/gangguan/create', label: 'Input Gangguan', mobileLabel: 'Tambah', icon: 'create', isPrimary: true },
+    { to: '/settings',  label: 'Settings',  mobileLabel: 'Settings',  icon: 'settings'  },
   ];
   if (auth.hasRole('TS')) return [
-    { to: '/dashboard', label: 'Dashboard', icon: 'dashboard' },
-    { to: '/gangguan',  label: 'Gangguan',  icon: 'gangguan'  },
-    { to: '/gangguan/create', label: 'Input Gangguan', icon: 'create', isPrimary: true },
-    { to: '/profil-ts', label: 'Digi TS',   icon: 'profil'    },
+    { to: '/dashboard', label: 'Dashboard', mobileLabel: 'Dashboard', icon: 'dashboard' },
+    { to: '/gangguan',  label: 'Gangguan',  mobileLabel: 'Gangguan',  icon: 'gangguan'  },
+    { to: '/gangguan/create', label: 'Input Gangguan', mobileLabel: 'Tambah', icon: 'create', isPrimary: true },
+    { to: '/profil-ts', label: 'Digi TS',   mobileLabel: 'Digi TS',   icon: 'profil'    },
   ];
   if (auth.hasRole('Agent')) return [
-    { to: '/agent-dashboard',  label: 'Dashboard',       icon: 'dashboard' },
-    { to: '/gangguan/create',  label: 'Tambah Gangguan', icon: 'create', isPrimary: true },
+    { to: '/agent-dashboard',  label: 'Dashboard',       mobileLabel: 'Dashboard', icon: 'dashboard' },
+    { to: '/gangguan/create',  label: 'Tambah Gangguan', mobileLabel: 'Tambah',    icon: 'create', isPrimary: true },
   ];
   return [];
 });
@@ -129,7 +129,7 @@ const roleLabel = computed(() => auth.primaryRole);
           <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
         </svg>
 
-        <span class="mobile-nav-label">{{ item.label }}</span>
+        <span class="mobile-nav-label">{{ item.mobileLabel || item.label }}</span>
       </RouterLink>
     </nav>
 
@@ -255,7 +255,7 @@ const roleLabel = computed(() => auth.primaryRole);
 
   /* Safe area for mobile content */
   .main-content {
-    padding-bottom: 96px !important;
+    padding-bottom: 110px !important;
     min-height: calc(100vh - 64px);
   }
 
