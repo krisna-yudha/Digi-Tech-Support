@@ -15,7 +15,6 @@
     "exceljs": "^4.4.0",
     "jszip": "^3.10.2",
     "mammoth": "^1.13.0",
-    "pdfjs-dist": "3.11.174",
     "pinia": "^2.3.1",
     "vue": "^3.5.18",
     "vue-router": "^4.5.1",
@@ -24,10 +23,5 @@
   "devDependencies": {
     "@vitejs/plugin-vue": "^5.2.4",
     "vite": "^5.4.19"
-  },
-  "pnpm": {
-    "ignoredBuiltDependencies": [
-      "canvas"
-    ]
   }
 }

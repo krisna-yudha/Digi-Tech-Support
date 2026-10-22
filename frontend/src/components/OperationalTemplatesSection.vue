@@ -2,16 +2,10 @@
 import { ref, computed, onMounted, onBeforeUnmount, nextTick } from 'vue';
 import JSZip from 'jszip';
 import mammoth from 'mammoth';
-import * as pdfjsLib from 'pdfjs-dist';
-import pdfWorker from 'pdfjs-dist/build/pdf.worker.min.js?url';
 import { useEditor, EditorContent } from '@tiptap/vue-3';
 import StarterKit from '@tiptap/starter-kit';
 import api from '../services/api';
 import { useAuthStore } from '../stores/auth';
-
-if (pdfjsLib?.GlobalWorkerOptions) {
-  pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorker;
-}
 
 const auth = useAuthStore();
 
@@ -151,49 +145,33 @@ function parsePlainTextWithHeadings(rawText) {
   return result.join('');
 }
 
-// Ekstrak teks murni dokumen PDF (tanpa mengubah format visual dokumen asli)
-// Digunakan murni untuk indexing pencarian kata kunci dan fungsi tombol salin teks
+// Ekstrak teks dasar dokumen PDF tanpa dependensi eksternal (pure JS)
+// Digunakan murni untuk indexing kata kunci pencarian
 async function extractPdfRawText(arrayBuffer) {
   try {
-    const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer });
-    const pdfDoc = await loadingTask.promise;
-    const numPages = pdfDoc.numPages;
-    const pagesText = [];
-
-    for (let pageNum = 1; pageNum <= numPages; pageNum++) {
-      const page = await pdfDoc.getPage(pageNum);
-      const textContent = await page.getTextContent();
-      const lines = [];
-      let currentY = null;
-      let currentLine = '';
-
-      for (const item of textContent.items) {
-        if (!('str' in item)) continue;
-        const str = item.str;
-        const y = Math.round(item.transform[5]);
-
-        if (currentY === null || Math.abs(currentY - y) > 4) {
-          if (currentLine.trim()) {
-            lines.push(currentLine.trim());
-          }
-          currentY = y;
-          currentLine = str;
-        } else {
-          currentLine += (currentLine.endsWith(' ') || str.startsWith(' ') ? '' : ' ') + str;
-        }
-      }
-      if (currentLine.trim()) {
-        lines.push(currentLine.trim());
-      }
-
-      if (lines.length > 0) {
-        pagesText.push(lines.join('\n'));
+    const bytes = new Uint8Array(arrayBuffer);
+    let str = '';
+    const len = Math.min(bytes.length, 500000);
+    for (let i = 0; i < len; i++) {
+      const code = bytes[i];
+      if ((code >= 32 && code <= 126) || code === 10 || code === 13) {
+        str += String.fromCharCode(code);
       }
     }
 
-    return pagesText.join('\n\n').trim();
+    const textPieces = [];
+    const streamRegex = /\(([^)]{2,})\)\s*Tj/g;
+    let match;
+    while ((match = streamRegex.exec(str)) !== null) {
+      const clean = match[1].replace(/\\([()\\])/g, '$1').trim();
+      if (clean.length > 2) {
+        textPieces.push(clean);
+      }
+    }
+
+    return textPieces.join(' ').trim();
   } catch (err) {
-    console.warn('Gagal membaca teks PDF untuk indexing:', err);
+    console.warn('Gagal membaca preview teks PDF:', err);
     return '';
   }
 }
