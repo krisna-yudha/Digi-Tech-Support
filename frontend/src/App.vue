@@ -12,14 +12,12 @@ const navItems = computed(() => {
     { to: '/dashboard', label: 'Dashboard', mobileLabel: 'Dashboard', icon: 'dashboard' },
     { to: '/gangguan',  label: 'Gangguan',  mobileLabel: 'Gangguan',  icon: 'gangguan'  },
     { to: '/gangguan/create', label: 'Input Gangguan', mobileLabel: 'Tambah', icon: 'create', isPrimary: true },
-    { to: '/agent/templates', label: 'Template', mobileLabel: 'Template', icon: 'template' },
     { to: '/settings',  label: 'Settings',  mobileLabel: 'Settings',  icon: 'settings'  },
   ];
   if (auth.hasRole('TS')) return [
     { to: '/dashboard', label: 'Dashboard', mobileLabel: 'Dashboard', icon: 'dashboard' },
     { to: '/gangguan',  label: 'Gangguan',  mobileLabel: 'Gangguan',  icon: 'gangguan'  },
     { to: '/gangguan/create', label: 'Input Gangguan', mobileLabel: 'Tambah', icon: 'create', isPrimary: true },
-    { to: '/agent/templates', label: 'Template', mobileLabel: 'Template', icon: 'template' },
     { to: '/profil-ts', label: 'Digi TS',   mobileLabel: 'Digi TS',   icon: 'profil'    },
   ];
   if (auth.hasRole('Agent')) return [

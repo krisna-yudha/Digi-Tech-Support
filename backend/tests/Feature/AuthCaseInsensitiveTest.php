@@ -74,10 +74,27 @@ class AuthCaseInsensitiveTest extends TestCase
         $res5->assertStatus(200);
         $this->assertEquals($user->id, $res5->json('user.id'));
 
-        // 6. Wrong password fails
+        // 6. Account with space instead of dot
+        $accountWithSpace = str_replace('.', ' ', $accountUpper);
+        $res6 = $this->postJson('/api/login', [
+            'email' => strtolower($accountWithSpace),
+            'password' => $password,
+        ]);
+        $res6->assertStatus(200);
+        $this->assertEquals($user->id, $res6->json('user.id'));
+
+        // 7. Password in uppercase or lowercase tolerance
+        $res7 = $this->postJson('/api/login', [
+            'email' => strtolower($accountUpper),
+            'password' => strtoupper($password),
+        ]);
+        $res7->assertStatus(200);
+        $this->assertEquals($user->id, $res7->json('user.id'));
+
+        // 8. Wrong password fails
         $resFail = $this->postJson('/api/login', [
             'email' => strtolower($accountUpper),
-            'password' => 'WrongPassword',
+            'password' => 'CompletelyDifferentPassword',
         ]);
         $resFail->assertStatus(422);
     }

@@ -21,39 +21,77 @@ class AuthController extends Controller
             'remember' => ['nullable', 'boolean'],
         ]);
 
-        $rawInput = trim($request->input('email'));
+        $rawInput = trim((string) $request->input('email'));
         $inputLower = strtolower($rawInput);
         $password = (string) $request->input('password');
 
-        // Sanitized account name (replaces spaces with underscore, strips invalid chars)
-        $cleanAccount = preg_replace('/[^a-z0-9._+\-]/', '', str_replace(' ', '_', $inputLower));
+        // Extract local part if user typed @domain or @ts.internal
+        $localPart = str_contains($inputLower, '@')
+            ? explode('@', $inputLower, 2)[0]
+            : $inputLower;
 
-        // Case-insensitive user lookup matching email, @ts.internal, username part, or name
+        // Common variations: dots <-> spaces <-> underscores
+        $withDot = str_replace(['_', ' '], '.', $localPart);
+        $withUnderscore = str_replace(['.', ' '], '_', $localPart);
+        $withSpace = str_replace(['.', '_'], ' ', $localPart);
+        $cleanAlphanumeric = preg_replace('/[^a-z0-9]/', '', $localPart);
+
         $isSqlite = DB::getDriverName() === 'sqlite';
+
         $user = User::query()
-            ->where(function ($q) use ($inputLower, $cleanAccount, $isSqlite) {
+            ->where(function ($q) use ($inputLower, $localPart, $withDot, $withUnderscore, $withSpace, $cleanAlphanumeric, $isSqlite) {
+                // Exact full email or email with domain
                 $q->whereRaw('LOWER(email) = ?', [$inputLower])
                   ->orWhereRaw('LOWER(email) = ?', [$inputLower . '@ts.internal'])
-                  ->orWhereRaw('LOWER(name) = ?', [$inputLower]);
+                  ->orWhereRaw('LOWER(email) = ?', [$localPart . '@ts.internal'])
+                  ->orWhereRaw('LOWER(email) = ?', [$withDot . '@ts.internal'])
+                  ->orWhereRaw('LOWER(email) = ?', [$withUnderscore . '@ts.internal'])
+                  ->orWhereRaw('LOWER(name) = ?', [$inputLower])
+                  ->orWhereRaw('LOWER(name) = ?', [$withSpace]);
 
+                // Match local-part before '@'
                 if (!$isSqlite) {
-                    $q->orWhereRaw('LOWER(SUBSTRING_INDEX(email, "@", 1)) = ?', [$inputLower]);
+                    $q->orWhereRaw('LOWER(SUBSTRING_INDEX(email, "@", 1)) = ?', [$localPart])
+                      ->orWhereRaw('LOWER(SUBSTRING_INDEX(email, "@", 1)) = ?', [$withDot])
+                      ->orWhereRaw('LOWER(SUBSTRING_INDEX(email, "@", 1)) = ?', [$withUnderscore]);
                 } else {
-                    $q->orWhereRaw('LOWER(SUBSTR(email, 1, INSTR(email, "@") - 1)) = ?', [$inputLower]);
+                    $q->orWhereRaw('LOWER(SUBSTR(email, 1, INSTR(email, "@") - 1)) = ?', [$localPart])
+                      ->orWhereRaw('LOWER(SUBSTR(email, 1, INSTR(email, "@") - 1)) = ?', [$withDot])
+                      ->orWhereRaw('LOWER(SUBSTR(email, 1, INSTR(email, "@") - 1)) = ?', [$withUnderscore]);
                 }
 
-                if (!empty($cleanAccount) && $cleanAccount !== $inputLower) {
-                    $q->orWhereRaw('LOWER(email) = ?', [$cleanAccount . '@ts.internal']);
-                    if (!$isSqlite) {
-                        $q->orWhereRaw('LOWER(SUBSTRING_INDEX(email, "@", 1)) = ?', [$cleanAccount]);
-                    } else {
-                        $q->orWhereRaw('LOWER(SUBSTR(email, 1, INSTR(email, "@") - 1)) = ?', [$cleanAccount]);
-                    }
+                // Match stripped alphanumeric if not empty
+                if (!empty($cleanAlphanumeric) && strlen($cleanAlphanumeric) >= 3) {
+                    $q->orWhereRaw("LOWER(REPLACE(REPLACE(REPLACE(email, '.', ''), '_', ''), '-', '')) = ?", [$cleanAlphanumeric])
+                      ->orWhereRaw("LOWER(REPLACE(REPLACE(REPLACE(email, '.', ''), '_', ''), '-', '')) = ?", [$cleanAlphanumeric . 'tsinternal']);
                 }
             })
             ->first();
 
-        if (!$user || !Hash::check($password, $user->password)) {
+        if (!$user) {
+            return response()->json([
+                'message' => 'Email atau password tidak valid.',
+            ], 422);
+        }
+
+        // Toleransi huruf besar/kecil (case-insensitive) pada password
+        $passwordMatches = Hash::check($password, $user->password)
+            || Hash::check(strtolower($password), $user->password)
+            || Hash::check(strtoupper($password), $user->password)
+            || Hash::check(ucfirst(strtolower($password)), $user->password)
+            || Hash::check(lcfirst(strtoupper($password)), $user->password);
+
+        // Fallback jika password di-hash menggunakan nama akun user
+        if (!$passwordMatches && !empty($user->email)) {
+            $accountPart = explode('@', $user->email)[0];
+            $passwordMatches = (
+                (strcasecmp($password, $accountPart) === 0 && Hash::check($accountPart, $user->password))
+                || (strcasecmp($password, strtolower($accountPart)) === 0 && Hash::check(strtolower($accountPart), $user->password))
+                || (strcasecmp($password, strtoupper($accountPart)) === 0 && Hash::check(strtoupper($accountPart), $user->password))
+            );
+        }
+
+        if (!$passwordMatches) {
             return response()->json([
                 'message' => 'Email atau password tidak valid.',
             ], 422);

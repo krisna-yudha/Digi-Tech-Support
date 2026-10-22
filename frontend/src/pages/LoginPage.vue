@@ -17,7 +17,7 @@ async function submit() {
   error.value   = '';
   try {
     const { data } = await api.post('/login', { 
-      email: form.email, 
+      email: form.email ? form.email.trim() : '', 
       password: form.password, 
       remember: form.remember 
     });
@@ -76,6 +76,9 @@ async function submit() {
               placeholder="Masukan account terdaftar"
               required
               autocomplete="username"
+              autocapitalize="none"
+              autocorrect="off"
+              spellcheck="false"
             />
           </div>
         </div>

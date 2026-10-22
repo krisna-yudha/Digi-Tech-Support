@@ -22,7 +22,7 @@ const routes = [
   { path: '/dashboard', name: 'dashboard', component: DashboardPage, meta: { roles: ['Admin', 'TS'] } },
   { path: '/profil-ts', name: 'profil-ts', component: TsProfilePage, meta: { roles: ['TS', 'Admin'] } },
   { path: '/agent-dashboard', name: 'agent-dashboard', component: AgentDashboardPage, meta: { roles: ['Agent'] } },
-  { path: '/agent/templates', alias: '/templates', name: 'agent-templates', component: AgentTemplatesPage, meta: { roles: ['Agent', 'TS', 'Admin'] } },
+  { path: '/agent/templates', alias: '/templates', name: 'agent-templates', component: AgentTemplatesPage, meta: { roles: ['Agent'] } },
   { path: '/agent/laporan/:id', name: 'agent-laporan-detail', component: AgentLaporanDetailPage, meta: { roles: ['Agent'] } },
   { path: '/gangguan', name: 'gangguan-list', component: GangguanListPage, meta: { roles: ['Admin', 'TS'] } },
   { path: '/gangguan/create', name: 'gangguan-create', component: GangguanCreatePage, meta: { roles: ['Agent', 'TS', 'Admin'] } },

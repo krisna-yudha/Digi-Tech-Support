@@ -9,6 +9,7 @@ use Illuminate\Support\Facades\Route;
 
 Route::post('/login', [AuthController::class, 'login']);
 Route::get('/evidence/{evidence}/view', [EvidenceController::class, 'view']);
+Route::get('/operational-templates/{operationalTemplate}/file', [\App\Http\Controllers\Api\OperationalTemplateController::class, 'file']);
 
 Route::middleware('auth:sanctum')->group(function () {
     Route::post('/logout', [AuthController::class, 'logout']);
@@ -17,6 +18,13 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::middleware('role:Agent,sanctum')->group(function () {
         Route::get('/agent/dashboard', [AuthController::class, 'agentDashboard']);
         Route::get('/agent/laporan/{gangguan}', [GangguanController::class, 'showForAgent']);
+
+        // Operational Templates (Khusus Role Agent)
+        Route::get('/operational-templates', [\App\Http\Controllers\Api\OperationalTemplateController::class, 'index']);
+        Route::post('/operational-templates', [\App\Http\Controllers\Api\OperationalTemplateController::class, 'store']);
+        Route::get('/operational-templates/{operationalTemplate}', [\App\Http\Controllers\Api\OperationalTemplateController::class, 'show']);
+        Route::put('/operational-templates/{operationalTemplate}', [\App\Http\Controllers\Api\OperationalTemplateController::class, 'update']);
+        Route::delete('/operational-templates/{operationalTemplate}', [\App\Http\Controllers\Api\OperationalTemplateController::class, 'destroy']);
     });
 
     Route::middleware('role:Agent|TS|Admin,sanctum')->group(function () {
@@ -25,13 +33,6 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('/gangguan/{gangguan}/join-incident', [GangguanController::class, 'joinIncident']);
         Route::post('/gangguan', [GangguanController::class, 'store']);
         Route::get('/cubicles', [\App\Http\Controllers\Api\CubicleController::class, 'index']);
-
-        // Operational Templates (DOCX, TXT, Rich-text)
-        Route::get('/operational-templates', [\App\Http\Controllers\Api\OperationalTemplateController::class, 'index']);
-        Route::post('/operational-templates', [\App\Http\Controllers\Api\OperationalTemplateController::class, 'store']);
-        Route::get('/operational-templates/{operationalTemplate}', [\App\Http\Controllers\Api\OperationalTemplateController::class, 'show']);
-        Route::put('/operational-templates/{operationalTemplate}', [\App\Http\Controllers\Api\OperationalTemplateController::class, 'update']);
-        Route::delete('/operational-templates/{operationalTemplate}', [\App\Http\Controllers\Api\OperationalTemplateController::class, 'destroy']);
     });
 
     Route::middleware('role:Admin|TS,sanctum')->group(function () {

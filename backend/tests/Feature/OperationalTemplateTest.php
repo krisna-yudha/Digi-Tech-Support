@@ -129,4 +129,92 @@ class OperationalTemplateTest extends TestCase
         $this->assertCount(1, $res2->json('data'));
         $this->assertEquals('Agent 2 Personal Template', $res2->json('data.0.title'));
     }
+
+    public function test_pdf_benchmark_template_cannot_be_updated(): void
+    {
+        $agent = User::factory()->create();
+        $agent->assignRole('Agent');
+
+        Sanctum::actingAs($agent);
+
+        $template = OperationalTemplate::create([
+            'user_id' => $agent->id,
+            'title' => 'SOP Gangguan Indihome',
+            'category' => 'SOP',
+            'content' => '<p>Konten SOP Baku</p>',
+            'original_filename' => 'sop_gangguan.pdf',
+            'is_shared' => false,
+        ]);
+
+        $response = $this->putJson("/api/operational-templates/{$template->id}", [
+            'title' => 'Coba Ubah SOP',
+            'category' => 'SOP',
+            'content' => '<p>Konten diubah</p>',
+        ]);
+
+        $response->assertStatus(422)
+            ->assertJsonPath('success', false)
+            ->assertJsonPath('message', 'Dokumen patokan PDF bersifat baku dan tidak dapat diubah.');
+    }
+
+    public function test_pdf_upload_as_file_and_stream(): void
+    {
+        \Illuminate\Support\Facades\Storage::fake('public');
+
+        $agent = User::factory()->create();
+        $agent->assignRole('Agent');
+
+        Sanctum::actingAs($agent);
+
+        $fakePdf = \Illuminate\Http\UploadedFile::fake()->create('sop_resmi.pdf', 500, 'application/pdf');
+
+        $response = $this->post('/api/operational-templates', [
+            'file' => $fakePdf,
+            'title' => 'SOP Resmi Call Center',
+            'category' => 'SOP',
+        ]);
+
+        $response->assertStatus(201)
+            ->assertJsonPath('data.title', 'SOP Resmi Call Center')
+            ->assertJsonPath('data.original_filename', 'sop_resmi.pdf');
+
+        $templateId = $response->json('data.id');
+        $filePath = $response->json('data.file_path');
+
+        $this->assertNotNull($filePath);
+        \Illuminate\Support\Facades\Storage::disk('public')->assertExists($filePath);
+
+        // Stream the file
+        $streamResponse = $this->get("/api/operational-templates/{$templateId}/file");
+        $streamResponse->assertStatus(200);
+        $streamResponse->assertHeader('Content-Type', 'application/pdf');
+    }
+
+    public function test_non_agent_cannot_access_operational_templates(): void
+    {
+        $admin = User::factory()->create();
+        $admin->assignRole('Admin');
+
+        Sanctum::actingAs($admin);
+
+        // Admin cannot index
+        $indexResponse = $this->getJson('/api/operational-templates');
+        $indexResponse->assertStatus(403);
+
+        // Admin cannot create
+        $createResponse = $this->postJson('/api/operational-templates', [
+            'title' => 'Admin Test Template',
+            'content' => 'Test content',
+        ]);
+        $createResponse->assertStatus(403);
+
+        $ts = User::factory()->create();
+        $ts->assignRole('TS');
+
+        Sanctum::actingAs($ts);
+
+        // TS cannot index
+        $tsResponse = $this->getJson('/api/operational-templates');
+        $tsResponse->assertStatus(403);
+    }
 }

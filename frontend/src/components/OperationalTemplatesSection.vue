@@ -2,10 +2,16 @@
 import { ref, computed, onMounted, onBeforeUnmount, nextTick } from 'vue';
 import JSZip from 'jszip';
 import mammoth from 'mammoth';
+import * as pdfjsLib from 'pdfjs-dist';
+import pdfWorker from 'pdfjs-dist/build/pdf.worker.min.js?url';
 import { useEditor, EditorContent } from '@tiptap/vue-3';
 import StarterKit from '@tiptap/starter-kit';
 import api from '../services/api';
 import { useAuthStore } from '../stores/auth';
+
+if (pdfjsLib?.GlobalWorkerOptions) {
+  pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorker;
+}
 
 const auth = useAuthStore();
 
@@ -145,6 +151,53 @@ function parsePlainTextWithHeadings(rawText) {
   return result.join('');
 }
 
+// Ekstrak teks murni dokumen PDF (tanpa mengubah format visual dokumen asli)
+// Digunakan murni untuk indexing pencarian kata kunci dan fungsi tombol salin teks
+async function extractPdfRawText(arrayBuffer) {
+  try {
+    const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer });
+    const pdfDoc = await loadingTask.promise;
+    const numPages = pdfDoc.numPages;
+    const pagesText = [];
+
+    for (let pageNum = 1; pageNum <= numPages; pageNum++) {
+      const page = await pdfDoc.getPage(pageNum);
+      const textContent = await page.getTextContent();
+      const lines = [];
+      let currentY = null;
+      let currentLine = '';
+
+      for (const item of textContent.items) {
+        if (!('str' in item)) continue;
+        const str = item.str;
+        const y = Math.round(item.transform[5]);
+
+        if (currentY === null || Math.abs(currentY - y) > 4) {
+          if (currentLine.trim()) {
+            lines.push(currentLine.trim());
+          }
+          currentY = y;
+          currentLine = str;
+        } else {
+          currentLine += (currentLine.endsWith(' ') || str.startsWith(' ') ? '' : ' ') + str;
+        }
+      }
+      if (currentLine.trim()) {
+        lines.push(currentLine.trim());
+      }
+
+      if (lines.length > 0) {
+        pagesText.push(lines.join('\n'));
+      }
+    }
+
+    return pagesText.join('\n\n').trim();
+  } catch (err) {
+    console.warn('Gagal membaca teks PDF untuk indexing:', err);
+    return '';
+  }
+}
+
 // ─── Component State ──────────────────────────────────────────────────────────
 // Mode tampilan: 'list' (koleksi template) | 'document' (dokumen langsung terbuka & bisa langsung diedit)
 const activeView = ref('list');
@@ -157,6 +210,8 @@ const fileInput = ref(null);
 const fileProcessing = ref(false);
 const uploadError = ref('');
 
+const uploadSuccess = ref('');
+
 // State data dokumen aktif (langsung diedit & disalin)
 const form = ref({
   id: null,
@@ -164,9 +219,19 @@ const form = ref({
   category: 'Umum',
   content: '<p></p>',
   original_filename: null,
+  file_path: null,
   author_name: '',
   updated_at: null
 });
+
+// Deteksi apakah dokumen yang sedang aktif adalah dokumen patokan PDF resmi
+const isDocumentPdf = computed(() => {
+  return form.value.original_filename?.toLowerCase().endsWith('.pdf') || false;
+});
+
+// Object URL dan loading state untuk menampilkan PDF asli
+const pdfBlobUrl = ref('');
+const pdfLoading = ref(false);
 
 const saving = ref(false);
 const saveError = ref('');
@@ -175,6 +240,41 @@ const saveSuccess = ref(false);
 // State feedback tombol salin
 const copiedId = ref(null);
 const isDocumentCopied = ref(false);
+
+// State menu aksi dropdown titik tiga (kebab menu) kartu
+const activeMenuId = ref(null);
+
+function toggleCardMenu(event, id) {
+  event.stopPropagation();
+  activeMenuId.value = activeMenuId.value === id ? null : id;
+}
+
+function handleGlobalClick() {
+  if (activeMenuId.value) {
+    activeMenuId.value = null;
+  }
+}
+
+function getCategoryBadgeClass(category) {
+  switch (category) {
+    case 'Script Respon': return 'badge-cat-script';
+    case 'Eskalasi':     return 'badge-cat-eskalasi';
+    case 'Billing':      return 'badge-cat-billing';
+    case 'Teknis':       return 'badge-cat-teknis';
+    case 'SOP':          return 'badge-cat-sop';
+    default:             return 'badge-cat-umum';
+  }
+}
+
+function getFileTypeBadge(filename) {
+  if (!filename) return null;
+  const ext = filename.split('.').pop()?.toLowerCase();
+  if (ext === 'docx' || ext === 'doc') return 'DOCX';
+  if (ext === 'pdf') return 'PDF';
+  if (ext === 'txt') return 'TXT';
+  if (ext === 'md') return 'MD';
+  return null;
+}
 
 const categories = [
   'Semua',
@@ -206,7 +306,16 @@ const editor = useEditor({
   }
 });
 
+onMounted(() => {
+  fetchTemplates();
+  window.addEventListener('click', handleGlobalClick);
+});
+
 onBeforeUnmount(() => {
+  window.removeEventListener('click', handleGlobalClick);
+  if (pdfBlobUrl.value) {
+    URL.revokeObjectURL(pdfBlobUrl.value);
+  }
   if (editor.value) {
     editor.value.destroy();
   }
@@ -240,14 +349,17 @@ const filteredTemplates = computed(() => {
   });
 });
 
-// ─── Buka Dokumen: Langsung Bisa Diedit di Halaman (Bebas Pop-up) ────────────
-function openDocument(template) {
+// ─── Buka Dokumen: Langsung Bisa Dilihat/Diedit di Halaman (Bebas Pop-up) ───
+async function openDocument(template) {
+  const isPdf = template.original_filename?.toLowerCase().endsWith('.pdf') || false;
+
   form.value = {
     id: template.id,
     title: template.title || '',
     category: template.category || 'Umum',
-    content: template.content || '<p></p>',
+    content: template.content || '',
     original_filename: template.original_filename || null,
+    file_path: template.file_path || null,
     author_name: template.user?.name || 'Agent',
     updated_at: template.updated_at
   };
@@ -255,21 +367,47 @@ function openDocument(template) {
   saveSuccess.value = false;
   activeView.value = 'document';
 
-  nextTick(() => {
-    if (editor.value) {
-      editor.value.commands.setContent(template.content || '<p></p>');
+  if (pdfBlobUrl.value) {
+    URL.revokeObjectURL(pdfBlobUrl.value);
+    pdfBlobUrl.value = '';
+  }
+
+  if (isPdf) {
+    pdfLoading.value = true;
+    try {
+      const res = await api.get(`/operational-templates/${template.id}/file`, {
+        responseType: 'blob'
+      });
+      pdfBlobUrl.value = URL.createObjectURL(new Blob([res.data], { type: 'application/pdf' }));
+    } catch (err) {
+      console.error('Gagal mengambil file PDF asli dari server:', err);
+    } finally {
+      pdfLoading.value = false;
     }
-  });
+  } else {
+    nextTick(() => {
+      if (editor.value) {
+        editor.value.setEditable(true);
+        editor.value.commands.setContent(template.content || '<p></p>');
+      }
+    });
+  }
   window.scrollTo({ top: 0, behavior: 'smooth' });
 }
 
 function openCreate() {
+  if (pdfBlobUrl.value) {
+    URL.revokeObjectURL(pdfBlobUrl.value);
+    pdfBlobUrl.value = '';
+  }
+
   form.value = {
     id: null,
     title: '',
     category: 'Umum',
     content: '<p></p>',
     original_filename: null,
+    file_path: null,
     author_name: auth.user?.name || 'Agent',
     updated_at: new Date()
   };
@@ -279,6 +417,7 @@ function openCreate() {
 
   nextTick(() => {
     if (editor.value) {
+      editor.value.setEditable(true);
       editor.value.commands.setContent('<p></p>');
       editor.value.commands.focus();
     }
@@ -287,11 +426,16 @@ function openCreate() {
 }
 
 function backToList() {
+  if (pdfBlobUrl.value) {
+    URL.revokeObjectURL(pdfBlobUrl.value);
+    pdfBlobUrl.value = '';
+  }
   activeView.value = 'list';
 }
 
 function triggerFileInput() {
   uploadError.value = '';
+  uploadSuccess.value = '';
   if (fileInput.value) {
     fileInput.value.value = '';
     fileInput.value.click();
@@ -307,6 +451,7 @@ async function handleFileChange(event) {
 
   fileProcessing.value = true;
   uploadError.value = '';
+  uploadSuccess.value = '';
 
   try {
     let parsedHtml = '';
@@ -327,34 +472,84 @@ async function handleFileChange(event) {
       const bodyHtml = result.value || '<p></p>';
       parsedHtml = docxHeaderHtml ? (docxHeaderHtml + bodyHtml) : bodyHtml;
 
+      // Word dapat langsung dibuka & diedit
+      form.value = {
+        id: null,
+        title: cleanTitle,
+        category: 'Umum',
+        content: parsedHtml,
+        original_filename: fileName,
+        file_path: null,
+        author_name: auth.user?.name || 'Agent',
+        updated_at: new Date()
+      };
+      saveError.value = '';
+      saveSuccess.value = false;
+      activeView.value = 'document';
+
+      nextTick(() => {
+        if (editor.value) {
+          editor.value.setEditable(true);
+          editor.value.commands.setContent(parsedHtml || '<p></p>');
+        }
+      });
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+
+    } else if (ext === 'pdf') {
+      const arrayBuffer = await file.arrayBuffer();
+      // Ekstrak teks murni hanya untuk keperluan pencarian keyword & tombol salin
+      const rawSearchText = await extractPdfRawText(arrayBuffer);
+
+      // Sesuai permintaan: Upload file PDF asli menggunakan FormData tanpa mengubah format di dalam PDF
+      const formData = new FormData();
+      formData.append('file', file);
+      formData.append('title', cleanTitle);
+      formData.append('category', 'SOP');
+      formData.append('content', rawSearchText || cleanTitle);
+
+      await api.post('/operational-templates', formData, {
+        headers: {
+          'Content-Type': 'multipart/form-data'
+        }
+      });
+      await fetchTemplates();
+
+      uploadSuccess.value = `Dokumen patokan resmi "${cleanTitle}" (PDF) berhasil diunggah tanpa mengubah format aslinya.`;
+      setTimeout(() => {
+        uploadSuccess.value = '';
+      }, 4500);
+
+      activeView.value = 'list';
+      return;
+
     } else if (ext === 'txt' || ext === 'md') {
       const rawText = await file.text();
       parsedHtml = parsePlainTextWithHeadings(rawText);
+
+      form.value = {
+        id: null,
+        title: cleanTitle,
+        category: 'Umum',
+        content: parsedHtml,
+        original_filename: fileName,
+        author_name: auth.user?.name || 'Agent',
+        updated_at: new Date()
+      };
+      saveError.value = '';
+      saveSuccess.value = false;
+      activeView.value = 'document';
+
+      nextTick(() => {
+        if (editor.value) {
+          editor.value.setEditable(true);
+          editor.value.commands.setContent(parsedHtml || '<p></p>');
+        }
+      });
+      window.scrollTo({ top: 0, behavior: 'smooth' });
     } else {
-      uploadError.value = 'Format file tidak didukung. Harap upload dokumen .docx, .txt, atau .md';
+      uploadError.value = 'Format file tidak didukung. Harap upload dokumen .docx, .pdf, .txt, atau .md';
       return;
     }
-
-    // Buka editor langsung di halaman tanpa pop-up!
-    form.value = {
-      id: null,
-      title: cleanTitle,
-      category: 'Umum',
-      content: parsedHtml,
-      original_filename: fileName,
-      author_name: auth.user?.name || 'Agent',
-      updated_at: new Date()
-    };
-    saveError.value = '';
-    saveSuccess.value = false;
-    activeView.value = 'document';
-
-    nextTick(() => {
-      if (editor.value) {
-        editor.value.commands.setContent(parsedHtml || '<p></p>');
-      }
-    });
-    window.scrollTo({ top: 0, behavior: 'smooth' });
   } catch (err) {
     console.error('Gagal membaca file template:', err);
     uploadError.value = 'Gagal memproses file dokumen. Pastikan file tidak rusak.';
@@ -367,6 +562,11 @@ async function handleFileChange(event) {
 async function handleSave() {
   saveError.value = '';
   saveSuccess.value = false;
+
+  if (isDocumentPdf.value) {
+    saveError.value = 'Dokumen patokan PDF bersifat baku dan tidak dapat diubah.';
+    return;
+  }
 
   const htmlContent = editor.value ? editor.value.getHTML() : '';
   const plainText = editor.value ? editor.value.getText().trim() : '';
@@ -434,7 +634,12 @@ function extractPlainText(html) {
 // Salin teks langsung dari editor dokumen aktif
 async function copyDocumentText() {
   try {
-    const text = editor.value ? editor.value.getText() : '';
+    let text = '';
+    if (isDocumentPdf.value) {
+      text = form.value.content || '';
+    } else {
+      text = editor.value ? editor.value.getText() : '';
+    }
     await navigator.clipboard.writeText(text);
     isDocumentCopied.value = true;
     setTimeout(() => {
@@ -448,7 +653,8 @@ async function copyDocumentText() {
 // Salin teks dari kartu template di daftar
 async function copyCardText(template) {
   try {
-    const text = extractPlainText(template.content);
+    const isPdf = template.original_filename?.toLowerCase().endsWith('.pdf');
+    const text = isPdf ? (template.content || '') : extractPlainText(template.content);
     await navigator.clipboard.writeText(text);
     copiedId.value = template.id;
     setTimeout(() => {
@@ -458,6 +664,43 @@ async function copyCardText(template) {
     }, 2000);
   } catch (err) {
     console.error('Gagal menyalin template:', err);
+  }
+}
+
+// Download file PDF asli dari dokumen aktif
+async function downloadActivePdf() {
+  if (pdfBlobUrl.value) {
+    const a = document.createElement('a');
+    a.href = pdfBlobUrl.value;
+    a.download = form.value.original_filename || `${form.value.title || 'dokumen'}.pdf`;
+    a.click();
+    return;
+  }
+  if (form.value.id) {
+    await downloadOriginalPdf({
+      id: form.value.id,
+      original_filename: form.value.original_filename,
+      title: form.value.title
+    });
+  }
+}
+
+// Download file PDF asli dari kartu
+async function downloadOriginalPdf(template) {
+  try {
+    const res = await api.get(`/operational-templates/${template.id}/file`, {
+      responseType: 'blob'
+    });
+    const blob = new Blob([res.data], { type: 'application/pdf' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = template.original_filename || `${template.title || 'dokumen'}.pdf`;
+    a.click();
+    URL.revokeObjectURL(url);
+  } catch (err) {
+    console.error('Gagal mengunduh file PDF asli:', err);
+    alert('Gagal mengunduh file PDF asli.');
   }
 }
 
@@ -561,9 +804,6 @@ function formatDate(val) {
   });
 }
 
-onMounted(() => {
-  fetchTemplates();
-});
 </script>
 
 <template>
@@ -577,18 +817,22 @@ onMounted(() => {
       <div class="templates-header">
         <div class="header-left">
           <div class="header-title-row">
-            <svg class="header-svg-icon" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
-              <polyline points="14 2 14 8 20 8"></polyline>
-              <line x1="16" y1="13" x2="8" y2="13"></line>
-              <line x1="16" y1="17" x2="8" y2="17"></line>
-              <polyline points="10 9 9 9 8 9"></polyline>
-            </svg>
-            <h3 class="section-heading">Template Operasional Agent</h3>
+            <div class="header-icon-circle">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                <polyline points="14 2 14 8 20 8"></polyline>
+                <line x1="16" y1="13" x2="8" y2="13"></line>
+                <line x1="16" y1="17" x2="8" y2="17"></line>
+                <polyline points="10 9 9 9 8 9"></polyline>
+              </svg>
+            </div>
+            <div>
+              <h3 class="section-heading">Template Operasional</h3>
+              <p class="section-caption">
+                Simpan naskah respons & SOP untuk mempercepat penanganan kendala pelanggan.
+              </p>
+            </div>
           </div>
-          <p class="section-caption">
-            Upload file DOCX/TXT atau klik template untuk langsung melihat dan mengedit isinya.
-          </p>
         </div>
 
         <!-- Action Buttons -->
@@ -596,7 +840,7 @@ onMounted(() => {
           <input
             type="file"
             ref="fileInput"
-            accept=".docx,.txt,.md"
+            accept=".docx,.pdf,.txt,.md"
             class="hidden-file-input"
             @change="handleFileChange"
           />
@@ -606,14 +850,14 @@ onMounted(() => {
             class="btn-outline-upload"
             @click="triggerFileInput"
             :disabled="fileProcessing"
-            title="Unggah template dari file .docx atau .txt"
+            title="Unggah template dari file .docx, .pdf, atau .txt"
           >
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
               <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
               <polyline points="17 8 12 3 7 8"></polyline>
               <line x1="12" y1="3" x2="12" y2="15"></line>
             </svg>
-            <span>{{ fileProcessing ? 'Membaca File...' : 'Upload Dokumen' }}</span>
+            <span>{{ fileProcessing ? 'Membaca...' : 'Upload Dokumen' }}</span>
           </button>
 
           <button
@@ -622,13 +866,22 @@ onMounted(() => {
             @click="openCreate"
             title="Tulis template operasional baru"
           >
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
               <line x1="12" y1="5" x2="12" y2="19"></line>
               <line x1="5" y1="12" x2="19" y2="12"></line>
             </svg>
             <span>Template Baru</span>
           </button>
         </div>
+      </div>
+
+      <!-- Alert success jika upload PDF patokan berhasil -->
+      <div v-if="uploadSuccess" class="alert-success-banner">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path>
+          <polyline points="22 4 12 14.01 9 11.01"></polyline>
+        </svg>
+        <span>{{ uploadSuccess }}</span>
       </div>
 
       <!-- Alert error jika upload gagal -->
@@ -644,7 +897,7 @@ onMounted(() => {
       <!-- Search & Category Filter Bar -->
       <div class="filter-controls-row">
         <div class="search-input-wrap">
-          <svg class="search-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <svg class="search-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
             <circle cx="11" cy="11" r="8"></circle>
             <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
           </svg>
@@ -661,7 +914,7 @@ onMounted(() => {
             @click="searchQuery = ''"
             aria-label="Bersihkan pencarian"
           >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
               <line x1="18" y1="6" x2="6" y2="18"></line>
               <line x1="6" y1="6" x2="18" y2="18"></line>
             </svg>
@@ -684,7 +937,8 @@ onMounted(() => {
 
       <!-- Template Cards Grid -->
       <div v-if="loading" class="state-notice">
-        Memuat daftar template operasional...
+        <div class="loading-spinner-sm"></div>
+        <span>Memuat daftar template operasional...</span>
       </div>
 
       <div v-else-if="filteredTemplates.length" class="templates-grid">
@@ -692,103 +946,147 @@ onMounted(() => {
           v-for="template in filteredTemplates"
           :key="template.id"
           class="template-card"
+          @click="openDocument(template)"
         >
-          <!-- Card Top: Category -->
+          <!-- Card Top: Category & File Extension Tag -->
           <div class="tcard-top">
-            <span class="badge-category">{{ template.category || 'Umum' }}</span>
+            <span class="badge-category" :class="getCategoryBadgeClass(template.category)">
+              {{ template.category || 'Umum' }}
+            </span>
+            <span v-if="getFileTypeBadge(template.original_filename)" class="badge-file-type" :class="'badge-' + getFileTypeBadge(template.original_filename).toLowerCase()">
+              {{ getFileTypeBadge(template.original_filename) === 'PDF' ? 'PDF PATOKAN' : getFileTypeBadge(template.original_filename) }}
+            </span>
           </div>
 
-          <!-- Title (Clickable Langsung Buka Dokumen) -->
-          <h4 class="tcard-title clickable-title" :title="template.title" @click="openDocument(template)">
+          <!-- Title -->
+          <h4 class="tcard-title" :title="template.title">
             {{ template.title }}
           </h4>
 
-          <!-- Text Preview Snippet (Clickable Langsung Buka Dokumen) -->
-          <p class="tcard-preview clickable-preview" @click="openDocument(template)">
+          <!-- Text Preview Snippet -->
+          <p class="tcard-preview">
             {{ extractPlainText(template.content) || '(Konten kosong)' }}
           </p>
 
           <!-- Meta info -->
           <div class="tcard-meta">
-            <span v-if="template.original_filename" class="meta-source" :title="template.original_filename">
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"></path>
-                <polyline points="13 2 13 9 20 9"></polyline>
-              </svg>
-              {{ template.original_filename }}
-            </span>
             <span class="meta-author">
               {{ template.user?.name || 'Agent' }} &bull; {{ formatDate(template.updated_at) }}
+            </span>
+            <span v-if="template.original_filename?.toLowerCase().endsWith('.pdf')" class="meta-locked-tag">
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
+                <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
+              </svg>
+              <span>Terkunci</span>
             </span>
           </div>
 
           <!-- Action Buttons -->
-          <div class="tcard-actions">
-            <button
-              type="button"
-              class="btn-action btn-view"
-              @click="openDocument(template)"
-              title="Buka dan langsung edit template ini"
-            >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
-                <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
-              </svg>
-              <span>Buka & Edit</span>
-            </button>
-
-            <button
-              type="button"
-              class="btn-action btn-copy"
-              :class="{ 'btn-copied': copiedId === template.id }"
-              @click="copyCardText(template)"
-              title="Salin isi template ke clipboard"
-            >
-              <svg v-if="copiedId === template.id" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-                <polyline points="20 6 9 17 4 12"></polyline>
-              </svg>
-              <svg v-else width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
-                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
-              </svg>
-              <span>{{ copiedId === template.id ? 'Tersalin' : 'Salin' }}</span>
-            </button>
-
-            <div class="download-dropdown">
+          <div class="tcard-actions" @click.stop>
+            <div class="tcard-actions-left">
               <button
                 type="button"
-                class="btn-action btn-download"
-                @click="downloadAsDocx(template)"
-                title="Unduh dokumen Word (.doc)"
+                class="btn-card-action"
+                :class="template.original_filename?.toLowerCase().endsWith('.pdf') ? 'btn-card-view-locked' : 'btn-card-edit'"
+                @click="openDocument(template)"
+                :title="template.original_filename?.toLowerCase().endsWith('.pdf') ? 'Lihat isi naskah dokumen patokan PDF ini' : 'Buka dan langsung edit template ini'"
               >
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
-                  <polyline points="7 10 12 15 17 10"></polyline>
-                  <line x1="12" y1="15" x2="12" y2="3"></line>
+                <!-- Icon Eye jika PDF patokan, Icon Edit jika template biasa -->
+                <svg v-if="template.original_filename?.toLowerCase().endsWith('.pdf')" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+                  <circle cx="12" cy="12" r="3"></circle>
                 </svg>
-                <span>DOCX</span>
+                <svg v-else width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
+                  <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
+                </svg>
+                <span>{{ template.original_filename?.toLowerCase().endsWith('.pdf') ? 'Lihat' : 'Buka' }}</span>
               </button>
+
               <button
                 type="button"
-                class="btn-action btn-download btn-txt-opt"
-                @click="downloadAsTxt(template)"
-                title="Unduh format teks murni (.txt)"
+                class="btn-card-action btn-card-copy"
+                :class="{ 'btn-card-copied': copiedId === template.id }"
+                @click="copyCardText(template)"
+                title="Salin isi template ke clipboard"
               >
-                TXT
+                <svg v-if="copiedId === template.id" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                  <polyline points="20 6 9 17 4 12"></polyline>
+                </svg>
+                <svg v-else width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                  <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                </svg>
+                <span>{{ copiedId === template.id ? 'Tersalin!' : 'Salin' }}</span>
               </button>
             </div>
 
-            <button
-              type="button"
-              class="btn-action btn-delete"
-              @click="deleteTemplate(template)"
-              title="Hapus template ini"
-            >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <polyline points="3 6 5 6 21 6"></polyline>
-                <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
-              </svg>
-            </button>
+            <div class="tcard-actions-right">
+              <button
+                type="button"
+                class="btn-card-kebab"
+                @click="toggleCardMenu($event, template.id)"
+                title="Opsi dokumen lainnya"
+                aria-label="Opsi dokumen lainnya"
+              >
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor">
+                  <circle cx="12" cy="5" r="2"></circle>
+                  <circle cx="12" cy="12" r="2"></circle>
+                  <circle cx="12" cy="19" r="2"></circle>
+                </svg>
+              </button>
+
+              <!-- Kebab Popover Dropdown -->
+              <div v-if="activeMenuId === template.id" class="card-popover-menu" @click.stop>
+                <button
+                  v-if="template.original_filename?.toLowerCase().endsWith('.pdf')"
+                  type="button"
+                  class="popover-item"
+                  @click="downloadOriginalPdf(template); activeMenuId = null"
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                    <polyline points="14 2 14 8 20 8"></polyline>
+                    <line x1="12" y1="18" x2="12" y2="12"></line>
+                    <line x1="9" y1="15" x2="15" y2="15"></line>
+                  </svg>
+                  <span>Unduh PDF Asli (.pdf)</span>
+                </button>
+
+                <template v-else>
+                  <button type="button" class="popover-item" @click="downloadAsDocx(template); activeMenuId = null">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                      <polyline points="14 2 14 8 20 8"></polyline>
+                      <line x1="16" y1="13" x2="8" y2="13"></line>
+                      <line x1="16" y1="17" x2="8" y2="17"></line>
+                    </svg>
+                    <span>Unduh Word (.doc)</span>
+                  </button>
+
+                  <button type="button" class="popover-item" @click="downloadAsTxt(template); activeMenuId = null">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                      <polyline points="14 2 14 8 20 8"></polyline>
+                      <line x1="12" y1="18" x2="12" y2="12"></line>
+                      <line x1="9" y1="15" x2="15" y2="15"></line>
+                    </svg>
+                    <span>Unduh Teks (.txt)</span>
+                  </button>
+                </template>
+
+                <div class="popover-divider"></div>
+
+                <button type="button" class="popover-item item-danger" @click="deleteTemplate(template); activeMenuId = null">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <polyline points="3 6 5 6 21 6"></polyline>
+                    <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+                  </svg>
+                  <span>Hapus Template</span>
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -803,11 +1101,11 @@ onMounted(() => {
         </svg>
         <p class="empty-title">Belum ada template operasional</p>
         <p class="empty-subtitle">
-          {{ searchQuery || selectedCategory !== 'Semua' ? 'Tidak ditemukan template yang cocok dengan filter pencarian.' : 'Unggah file dokumen DOCX/TXT atau buat template baru untuk mempercepat penanganan kendala.' }}
+          {{ searchQuery || selectedCategory !== 'Semua' ? 'Tidak ditemukan template yang cocok dengan filter pencarian.' : 'Unggah file dokumen DOCX/PDF/TXT atau buat template baru untuk mempercepat penanganan kendala.' }}
         </p>
         <div v-if="!searchQuery && selectedCategory === 'Semua'" class="empty-action-row">
           <button type="button" class="btn-outline-upload" @click="triggerFileInput">
-            Upload File DOCX/TXT
+            Upload File Dokumen
           </button>
           <button type="button" class="btn-primary" @click="openCreate">
             Buat Template Baru
@@ -817,7 +1115,9 @@ onMounted(() => {
     </article>
 
     <!-- ══════════════════════════════════════════════════════════════════════════
-         TAMPILAN 2: DOKUMEN LANGSUNG BISA DIEDIT (INLINE TANPA POP-UP)
+         TAMPILAN 2: DOKUMEN (INLINE DI HALAMAN)
+         - PDF: Terkunci (Read-Only) sebagai Patokan Resmi Tanpa Edit
+         - DOCX/TXT: Bisa Diedit Langsung
          ══════════════════════════════════════════════════════════════════════════ -->
     <article v-else-if="activeView === 'document'" class="card inline-document-card">
       
@@ -827,7 +1127,7 @@ onMounted(() => {
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
             <polyline points="15 18 9 12 15 6"></polyline>
           </svg>
-          <span>Kembali ke Daftar Template</span>
+          <span>Kembali</span>
         </button>
 
         <div class="inline-actions-group">
@@ -846,11 +1146,26 @@ onMounted(() => {
               <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
               <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
             </svg>
-            <span>{{ isDocumentCopied ? 'Tersalin' : 'Salin Teks' }}</span>
+            <span class="btn-text-responsive">{{ isDocumentCopied ? 'Tersalin' : 'Salin' }}</span>
           </button>
 
-          <!-- Export DOCX / TXT -->
-          <div class="download-dropdown">
+          <!-- Export DOCX / TXT untuk Word/Text, atau Unduh PDF untuk Dokumen PDF -->
+          <button
+            v-if="isDocumentPdf"
+            type="button"
+            class="btn-action btn-download btn-download-pdf"
+            @click="downloadActivePdf"
+            title="Unduh file dokumen PDF asli"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+              <polyline points="7 10 12 15 17 10"></polyline>
+              <line x1="12" y1="15" x2="12" y2="3"></line>
+            </svg>
+            <span class="btn-text-responsive">Unduh PDF</span>
+          </button>
+
+          <div v-else class="download-dropdown">
             <button
               type="button"
               class="btn-action btn-download"
@@ -886,11 +1201,21 @@ onMounted(() => {
               <polyline points="3 6 5 6 21 6"></polyline>
               <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
             </svg>
-            <span>Hapus</span>
+            <span class="btn-text-responsive">Hapus</span>
           </button>
 
-          <!-- Simpan Dokumen -->
+          <!-- Status Terkunci (Jika Dokumen Patokan PDF) -->
+          <span v-if="isDocumentPdf" class="badge-locked-status" title="Dokumen patokan PDF terkunci dari pengeditan">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+              <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
+              <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
+            </svg>
+            <span>Read-Only</span>
+          </span>
+
+          <!-- Simpan Dokumen (Hanya untuk template non-PDF) -->
           <button
+            v-else
             type="button"
             class="btn-primary btn-save"
             :class="{ 'btn-save-success': saveSuccess }"
@@ -908,7 +1233,7 @@ onMounted(() => {
             </svg>
             <span v-if="saving">Menyimpan...</span>
             <span v-else-if="saveSuccess">Tersimpan!</span>
-            <span v-else>Simpan Dokumen</span>
+            <span v-else>Simpan</span>
           </button>
         </div>
       </div>
@@ -923,9 +1248,14 @@ onMounted(() => {
         <span>{{ saveError }}</span>
       </div>
 
-      <!-- Dokumen Header: Judul Langsung Bisa Diedit + Meta Inline -->
+      <!-- Dokumen Header: Judul & Meta Inline -->
       <div class="doc-header-block">
+        <!-- Judul Readonly jika PDF, Input jika non-PDF -->
+        <div v-if="isDocumentPdf" class="doc-title-locked">
+          <h2 class="title-text-locked">{{ form.title }}</h2>
+        </div>
         <input
+          v-else
           type="text"
           v-model="form.title"
           class="doc-title-input"
@@ -935,10 +1265,13 @@ onMounted(() => {
         />
 
         <div class="doc-meta-bar">
-          <!-- Kategori Selector -->
+          <!-- Kategori Selector (Readonly jika PDF) -->
           <div class="inline-meta-item">
             <label class="meta-label">Kategori:</label>
-            <select v-model="form.category" class="inline-select">
+            <span v-if="isDocumentPdf" class="badge-category" :class="getCategoryBadgeClass(form.category)">
+              {{ form.category }}
+            </span>
+            <select v-else v-model="form.category" class="inline-select">
               <option v-for="cat in formCategories" :key="cat" :value="cat">{{ cat }}</option>
             </select>
           </div>
@@ -955,8 +1288,8 @@ onMounted(() => {
         </div>
       </div>
 
-      <!-- Toolbar Formatting Word Layaknya Word -->
-      <div v-if="editor" class="editor-toolbar">
+      <!-- Toolbar Formatting Word (Hanya Muncul jika Dokumen Non-PDF) -->
+      <div v-if="editor && !isDocumentPdf" class="editor-toolbar">
         <div class="toolbar-group">
           <button
             type="button"
@@ -1139,8 +1472,71 @@ onMounted(() => {
         </div>
       </div>
 
-      <!-- Lembar Dokumen (Langsung Bisa Diklik & Diedit di Sini) -->
-      <div class="doc-body-wrapper">
+      <!-- Jika Dokumen PDF Patokan Baku: Tampilkan Langsung File PDF Asli Tanpa Mengubah Format -->
+      <div v-if="isDocumentPdf" class="pdf-viewer-wrapper">
+        <!-- PDF Action Bar -->
+        <div class="pdf-quick-toolbar">
+          <div class="pdf-toolbar-info">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+              <polyline points="14 2 14 8 20 8"></polyline>
+            </svg>
+            <span class="pdf-filename-tag">{{ form.original_filename || 'Dokumen Patokan.pdf' }}</span>
+          </div>
+
+          <div class="pdf-toolbar-actions">
+            <a
+              v-if="pdfBlobUrl"
+              :href="pdfBlobUrl"
+              target="_blank"
+              class="btn-pdf-tool"
+              title="Buka PDF di tab baru atau layar penuh"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path>
+                <polyline points="15 3 21 3 21 9"></polyline>
+                <line x1="10" y1="14" x2="21" y2="3"></line>
+              </svg>
+              <span>Buka Layar Penuh</span>
+            </a>
+
+            <button
+              type="button"
+              class="btn-pdf-tool btn-pdf-download"
+              @click="downloadActivePdf"
+              title="Unduh file PDF asli tanpa perubahan format"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                <polyline points="7 10 12 15 17 10"></polyline>
+                <line x1="12" y1="15" x2="12" y2="3"></line>
+              </svg>
+              <span>Unduh PDF Asli</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- Frame Preview PDF Asli -->
+        <div class="pdf-frame-container">
+          <div v-if="pdfLoading" class="pdf-loading-state">
+            <div class="loading-spinner-sm"></div>
+            <span>Memuat file PDF asli...</span>
+          </div>
+          <iframe
+            v-else-if="pdfBlobUrl"
+            :src="pdfBlobUrl"
+            class="pdf-native-frame"
+            title="Preview Naskah PDF Asli"
+          ></iframe>
+          <div v-else class="pdf-fallback-state">
+            <p>File PDF tidak dapat dimuat langsung di browser ini.</p>
+            <button type="button" class="btn-primary" @click="downloadActivePdf">Unduh Dokumen PDF</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Jika Non-PDF (Word/TXT): Lembar Dokumen TipTap Langsung Diedit -->
+      <div v-else class="doc-body-wrapper">
         <div class="doc-paper-sheet">
           <EditorContent :editor="editor" />
         </div>
@@ -1149,13 +1545,13 @@ onMounted(() => {
       <!-- Bottom Quick Action Row -->
       <div class="doc-footer-bar">
         <div class="footer-left-info">
-          <span class="info-tip">
+          <span v-if="!isDocumentPdf" class="info-tip">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <circle cx="12" cy="12" r="10"></circle>
               <line x1="12" y1="16" x2="12" y2="12"></line>
               <line x1="12" y1="8" x2="12.01" y2="8"></line>
             </svg>
-            Klik di mana saja pada lembar dokumen di atas untuk langsung mengedit teks, lalu klik <strong>Simpan Dokumen</strong>.
+            Klik di mana saja pada lembar dokumen di atas untuk langsung mengedit teks.
           </span>
         </div>
 
@@ -1163,7 +1559,28 @@ onMounted(() => {
           <button type="button" class="btn-cancel" @click="backToList">
             Kembali ke Daftar
           </button>
+
+          <!-- Jika PDF, tombol aksi utama adalah Salin Teks -->
           <button
+            v-if="isDocumentPdf"
+            type="button"
+            class="btn-primary btn-copy-prominent"
+            :class="{ 'btn-save-success': isDocumentCopied }"
+            @click="copyDocumentText"
+          >
+            <svg v-if="isDocumentCopied" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+              <polyline points="20 6 9 17 4 12"></polyline>
+            </svg>
+            <svg v-else width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+              <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+              <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+            </svg>
+            <span>{{ isDocumentCopied ? 'Teks Tersalin!' : 'Salin Seluruh Naskah' }}</span>
+          </button>
+
+          <!-- Jika Non-PDF, tombol aksi utama adalah Simpan Dokumen -->
+          <button
+            v-else
             type="button"
             class="btn-primary btn-save"
             :class="{ 'btn-save-success': saveSuccess }"
@@ -1204,51 +1621,62 @@ onMounted(() => {
   flex-direction: column;
   gap: 16px;
   background: #ffffff;
-  border-radius: var(--radius, 16px);
-  border: 1px solid var(--border, #e2e8f0);
+  border-radius: 16px;
+  border: 1px solid #e2e8f0;
+  padding: 20px;
 }
 
+/* Header Section */
 .templates-header {
   display: flex;
   justify-content: space-between;
-  align-items: flex-start;
+  align-items: center;
   gap: 16px;
   flex-wrap: wrap;
 }
 
 .header-left {
   flex: 1;
-  min-width: 250px;
+  min-width: 240px;
 }
 
 .header-title-row {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 12px;
 }
 
-.header-svg-icon {
+.header-icon-circle {
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
+  background: #eff6ff;
   color: #2563eb;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   flex-shrink: 0;
 }
 
 .section-heading {
   margin: 0;
   font-size: 1.15rem;
-  font-weight: 700;
+  font-weight: 800;
   color: #0f172a;
+  letter-spacing: -0.01em;
 }
 
 .section-caption {
-  margin: 4px 0 0;
-  font-size: 0.84rem;
-  color: var(--muted, #64748b);
+  margin: 3px 0 0;
+  font-size: 0.82rem;
+  color: #64748b;
+  line-height: 1.4;
 }
 
 .header-actions-group {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   flex-wrap: wrap;
 }
 
@@ -1259,16 +1687,17 @@ onMounted(() => {
 .btn-outline-upload {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   padding: 8px 14px;
   background: #ffffff;
   border: 1.5px solid #cbd5e1;
   color: #334155;
-  border-radius: 8px;
-  font-size: 0.84rem;
-  font-weight: 600;
+  border-radius: 10px;
+  font-size: 0.82rem;
+  font-weight: 700;
   cursor: pointer;
   transition: all 0.15s ease;
+  user-select: none;
 }
 
 .btn-outline-upload:hover:not(:disabled) {
@@ -1277,13 +1706,24 @@ onMounted(() => {
   background: #eff6ff;
 }
 
+.btn-outline-upload:active:not(:disabled) {
+  transform: scale(0.96);
+}
+
 .btn-add-template {
   display: inline-flex;
   align-items: center;
   gap: 6px;
   padding: 8px 16px;
-  font-size: 0.84rem;
+  font-size: 0.82rem;
   font-weight: 700;
+  border-radius: 10px;
+  box-shadow: 0 2px 8px rgba(37, 99, 235, 0.2);
+  user-select: none;
+}
+
+.btn-add-template:active {
+  transform: scale(0.96);
 }
 
 .alert-error-banner {
@@ -1293,15 +1733,29 @@ onMounted(() => {
   padding: 10px 14px;
   background: #fee2e2;
   color: #991b1b;
-  border-radius: 8px;
+  border-radius: 10px;
   font-size: 0.84rem;
   border: 1px solid #fecaca;
 }
 
+.alert-success-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  background: #ecfdf5;
+  color: #065f46;
+  border-radius: 10px;
+  font-size: 0.84rem;
+  border: 1px solid #a7f3d0;
+  animation: fadeIn 0.15s ease-out;
+}
+
+/* Filter Controls (Search + Category Pills) */
 .filter-controls-row {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 10px;
 }
 
 .search-input-wrap {
@@ -1311,7 +1765,7 @@ onMounted(() => {
 
 .search-icon {
   position: absolute;
-  left: 12px;
+  left: 14px;
   top: 50%;
   transform: translateY(-50%);
   color: #94a3b8;
@@ -1320,10 +1774,10 @@ onMounted(() => {
 
 .search-field {
   width: 100%;
-  padding: 9px 36px 9px 36px;
-  font-size: 0.86rem;
+  padding: 10px 40px 10px 42px;
+  font-size: 0.9rem;
   border: 1px solid #cbd5e1;
-  border-radius: 8px;
+  border-radius: 12px;
   background: #f8fafc;
   outline: none;
   transition: all 0.15s ease;
@@ -1332,7 +1786,7 @@ onMounted(() => {
 .search-field:focus {
   background: #ffffff;
   border-color: #2563eb;
-  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
 }
 
 .btn-clear-search {
@@ -1342,59 +1796,94 @@ onMounted(() => {
   transform: translateY(-50%);
   background: none;
   border: none;
-  padding: 4px;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
   color: #94a3b8;
   cursor: pointer;
   display: flex;
   align-items: center;
+  justify-content: center;
 }
 
 .btn-clear-search:hover {
+  background: #f1f5f9;
   color: #334155;
 }
 
 .category-pills-bar {
   display: flex;
-  gap: 6px;
+  gap: 8px;
   overflow-x: auto;
-  padding-bottom: 2px;
-  scrollbar-width: thin;
+  padding: 4px 2px 6px;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+  -webkit-overflow-scrolling: touch;
+}
+
+.category-pills-bar::-webkit-scrollbar {
+  display: none;
 }
 
 .cat-pill {
-  padding: 5px 12px;
+  padding: 6px 14px;
   border-radius: 999px;
   border: 1px solid #e2e8f0;
-  background: #f8fafc;
+  background: #ffffff;
   color: #64748b;
-  font-size: 0.78rem;
+  font-size: 0.8rem;
   font-weight: 600;
   cursor: pointer;
   white-space: nowrap;
   transition: all 0.15s ease;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
 }
 
 .cat-pill:hover {
-  background: #e2e8f0;
+  background: #f1f5f9;
   color: #1e293b;
+}
+
+.cat-pill:active {
+  transform: scale(0.94);
 }
 
 .cat-pill.active {
   background: #2563eb;
   color: #ffffff;
   border-color: #2563eb;
+  box-shadow: 0 2px 8px rgba(37, 99, 235, 0.25);
 }
 
 .state-notice {
   text-align: center;
-  padding: 30px;
+  padding: 36px 20px;
   color: #64748b;
   font-size: 0.88rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
 }
 
+.loading-spinner-sm {
+  width: 18px;
+  height: 18px;
+  border: 2px solid #cbd5e1;
+  border-top-color: #2563eb;
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* Templates Grid */
 .templates-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(290px, 1fr));
   gap: 14px;
 }
 
@@ -1403,15 +1892,23 @@ onMounted(() => {
   flex-direction: column;
   background: #ffffff;
   border: 1px solid #e2e8f0;
-  border-radius: 12px;
-  padding: 14px;
+  border-radius: 14px;
+  padding: 16px;
+  cursor: pointer;
+  position: relative;
   transition: transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
 }
 
 .template-card:hover {
   transform: translateY(-2px);
   border-color: #cbd5e1;
-  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.05);
+  box-shadow: 0 6px 18px rgba(15, 23, 42, 0.06);
+}
+
+.template-card:active {
+  transform: scale(0.985);
 }
 
 .tcard-top {
@@ -1425,51 +1922,88 @@ onMounted(() => {
 .badge-category {
   font-size: 0.72rem;
   font-weight: 700;
-  background: #eff6ff;
-  color: #1d4ed8;
   padding: 3px 8px;
   border-radius: 6px;
+  border: 1px solid transparent;
 }
 
-.badge-shared {
-  font-size: 0.68rem;
-  font-weight: 700;
-  background: #e8f7ec;
-  color: #146c2e;
-  padding: 2px 7px;
-  border-radius: 999px;
-}
-
-.badge-private {
-  font-size: 0.68rem;
-  font-weight: 700;
+.badge-cat-umum {
   background: #f1f5f9;
-  color: #64748b;
-  padding: 2px 7px;
-  border-radius: 999px;
+  color: #475569;
+  border-color: #e2e8f0;
+}
+
+.badge-cat-script {
+  background: #eef2ff;
+  color: #4f46e5;
+  border-color: #c7d2fe;
+}
+
+.badge-cat-eskalasi {
+  background: #fffbeb;
+  color: #b45309;
+  border-color: #fde68a;
+}
+
+.badge-cat-billing {
+  background: #ecfdf5;
+  color: #047857;
+  border-color: #a7f3d0;
+}
+
+.badge-cat-teknis {
+  background: #f0f9ff;
+  color: #0284c7;
+  border-color: #bae6fd;
+}
+
+.badge-cat-sop {
+  background: #fff1f2;
+  color: #be123c;
+  border-color: #fecdd3;
+}
+
+.badge-file-type {
+  font-size: 0.66rem;
+  font-weight: 800;
+  padding: 2px 6px;
+  border-radius: 4px;
+  letter-spacing: 0.04em;
+}
+
+.badge-docx {
+  background: #eff6ff;
+  color: #1d4ed8;
+  border: 1px solid #bfdbfe;
+}
+
+.badge-pdf {
+  background: #fef2f2;
+  color: #dc2626;
+  border: 1px solid #fecaca;
+}
+
+.badge-txt, .badge-md {
+  background: #f8fafc;
+  color: #475569;
+  border: 1px solid #e2e8f0;
 }
 
 .tcard-title {
   margin: 0 0 6px;
-  font-size: 0.95rem;
+  font-size: 0.96rem;
   font-weight: 700;
   color: #0f172a;
   line-height: 1.35;
-  white-space: nowrap;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  -webkit-box-orient: vertical;
   overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.clickable-title {
-  cursor: pointer;
-  transition: color 0.15s ease;
-}
-.clickable-title:hover {
-  color: #2563eb;
 }
 
 .tcard-preview {
-  margin: 0 0 12px;
+  margin: 0 0 10px;
   font-size: 0.8rem;
   color: #64748b;
   line-height: 1.45;
@@ -1481,17 +2015,11 @@ onMounted(() => {
   -webkit-box-orient: vertical;
 }
 
-.clickable-preview {
-  cursor: pointer;
-}
-.clickable-preview:hover {
-  color: #1e293b;
-}
-
 .tcard-meta {
   display: flex;
-  flex-direction: column;
-  gap: 4px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
   font-size: 0.74rem;
   color: #94a3b8;
   margin-top: auto;
@@ -1499,33 +2027,54 @@ onMounted(() => {
   border-top: 1px dashed #f1f5f9;
 }
 
-.meta-source {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  color: #2563eb;
-  font-weight: 600;
+.meta-author {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
+.meta-locked-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 0.68rem;
+  font-weight: 700;
+  color: #dc2626;
+  background: #fef2f2;
+  border: 1px solid #fee2e2;
+  padding: 1px 6px;
+  border-radius: 4px;
+}
+
+/* Card Actions (Bottom row) */
 .tcard-actions {
   display: flex;
   align-items: center;
-  gap: 6px;
+  justify-content: space-between;
+  gap: 8px;
   margin-top: 10px;
   padding-top: 10px;
   border-top: 1px solid #f1f5f9;
+  position: relative;
 }
 
-.btn-action {
+.tcard-actions-left {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.tcard-actions-right {
+  position: relative;
+}
+
+.btn-card-action {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  padding: 6px 10px;
-  border-radius: 6px;
-  font-size: 0.76rem;
+  gap: 5px;
+  padding: 6px 12px;
+  border-radius: 8px;
+  font-size: 0.78rem;
   font-weight: 700;
   cursor: pointer;
   border: 1px solid transparent;
@@ -1533,67 +2082,131 @@ onMounted(() => {
   user-select: none;
 }
 
-.btn-view {
-  background: #f0fdf4;
-  color: #166534;
-  border-color: #bbf7d0;
-}
-.btn-view:hover {
-  background: #dcfce7;
-  color: #14532d;
+.btn-card-action:active {
+  transform: scale(0.94);
 }
 
-.btn-copy {
+.btn-card-edit {
   background: #eff6ff;
-  color: #1d4ed8;
-  border-color: #dbeafe;
+  color: #2563eb;
+  border-color: #bfdbfe;
 }
-.btn-copy:hover {
+
+.btn-card-edit:hover {
   background: #dbeafe;
 }
 
-.btn-copied {
-  background: #dcfce7 !important;
-  color: #15803d !important;
-  border-color: #bbf7d0 !important;
-}
-
-.download-dropdown {
-  display: flex;
-  align-items: center;
-}
-
-.btn-download {
+.btn-card-view-locked {
   background: #f8fafc;
-  color: #475569;
+  color: #334155;
+  border-color: #cbd5e1;
+}
+
+.btn-card-view-locked:hover {
+  background: #e2e8f0;
+  color: #0f172a;
+}
+
+.btn-card-copy {
+  background: #f8fafc;
+  color: #334155;
   border-color: #e2e8f0;
 }
-.btn-download:hover {
-  background: #e2e8f0;
+
+.btn-card-copy:hover {
+  background: #f1f5f9;
 }
 
-.btn-txt-opt {
-  padding: 6px 6px;
-  font-size: 0.72rem;
-  border-left: none;
-  border-radius: 0 6px 6px 0;
+.btn-card-copied {
+  background: #ecfdf5 !important;
+  color: #059669 !important;
+  border-color: #a7f3d0 !important;
 }
 
-.btn-download:first-child {
-  border-radius: 6px 0 0 6px;
+.btn-card-kebab {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  color: #64748b;
+  cursor: pointer;
+  transition: all 0.12s ease;
 }
 
-.btn-delete {
+.btn-card-kebab:hover {
+  background: #f1f5f9;
+  color: #0f172a;
+}
+
+.btn-card-kebab:active {
+  transform: scale(0.92);
+}
+
+/* Card Popover Dropdown */
+.card-popover-menu {
+  position: absolute;
+  right: 0;
+  bottom: 38px;
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  box-shadow: 0 10px 25px rgba(15, 23, 42, 0.12);
+  padding: 6px;
+  z-index: 30;
+  min-width: 175px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  animation: popoverFadeIn 0.12s ease-out;
+}
+
+@keyframes popoverFadeIn {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.popover-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: #334155;
+  border-radius: 8px;
+  cursor: pointer;
+  border: none;
   background: transparent;
-  color: #94a3b8;
-  padding: 6px 8px;
-  margin-left: auto;
+  width: 100%;
+  text-align: left;
+  transition: background 0.12s ease;
 }
-.btn-delete:hover {
-  background: #fee2e2;
+
+.popover-item:hover {
+  background: #f1f5f9;
+  color: #0f172a;
+}
+
+.popover-divider {
+  height: 1px;
+  background: #f1f5f9;
+  margin: 4px 0;
+}
+
+.popover-item.item-danger {
   color: #dc2626;
 }
 
+.popover-item.item-danger:hover {
+  background: #fef2f2;
+  color: #b91c1c;
+}
+
+/* Empty State */
 .empty-state-box {
   display: flex;
   flex-direction: column;
@@ -1602,7 +2215,7 @@ onMounted(() => {
   padding: 40px 20px;
   text-align: center;
   border: 2px dashed #e2e8f0;
-  border-radius: 12px;
+  border-radius: 14px;
   background: #fafafa;
 }
 
@@ -1635,8 +2248,8 @@ onMounted(() => {
   flex-direction: column;
   gap: 16px;
   background: #ffffff;
-  border-radius: var(--radius, 16px);
-  border: 1px solid var(--border, #e2e8f0);
+  border-radius: 16px;
+  border: 1px solid #e2e8f0;
   padding: 24px;
   animation: fadeIn 0.18s ease-out;
 }
@@ -1670,8 +2283,13 @@ onMounted(() => {
   cursor: pointer;
   transition: background 0.15s ease;
 }
+
 .btn-back-link:hover {
   background: #eff6ff;
+}
+
+.btn-back-link:active {
+  transform: scale(0.96);
 }
 
 .inline-actions-group {
@@ -1681,13 +2299,109 @@ onMounted(() => {
   flex-wrap: wrap;
 }
 
+.btn-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 7px 12px;
+  border-radius: 8px;
+  font-size: 0.8rem;
+  font-weight: 700;
+  cursor: pointer;
+  border: 1px solid transparent;
+  transition: all 0.12s ease;
+  user-select: none;
+}
+
+.btn-action:active {
+  transform: scale(0.95);
+}
+
+.btn-copy {
+  background: #eff6ff;
+  color: #1d4ed8;
+  border-color: #dbeafe;
+}
+
+.btn-copy:hover {
+  background: #dbeafe;
+}
+
+.btn-copied {
+  background: #ecfdf5 !important;
+  color: #059669 !important;
+  border-color: #a7f3d0 !important;
+}
+
+.download-dropdown {
+  display: flex;
+  align-items: center;
+}
+
+.btn-download {
+  background: #f8fafc;
+  color: #475569;
+  border-color: #e2e8f0;
+}
+
+.btn-download:hover {
+  background: #e2e8f0;
+}
+
+.btn-download:first-child {
+  border-radius: 8px 0 0 8px;
+}
+
+.btn-txt-opt {
+  padding: 7px 8px;
+  font-size: 0.74rem;
+  border-left: none;
+  border-radius: 0 8px 8px 0;
+}
+
 .btn-delete-view {
   background: #fee2e2;
   color: #dc2626;
   border-color: #fecaca;
 }
+
 .btn-delete-view:hover {
   background: #fecaca;
+}
+
+.badge-locked-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: 8px;
+  font-size: 0.8rem;
+  font-weight: 700;
+  background: #fef2f2;
+  color: #991b1b;
+  border: 1px solid #fecaca;
+}
+
+.btn-copy-prominent {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 18px;
+  font-size: 0.85rem;
+  font-weight: 700;
+  border-radius: 8px;
+  background: #2563eb;
+  color: #ffffff;
+  box-shadow: 0 2px 8px rgba(37, 99, 235, 0.25);
+  transition: all 0.15s ease;
+}
+
+.btn-copy-prominent:hover {
+  background: #1d4ed8;
+}
+
+.btn-copy-prominent:active {
+  transform: scale(0.96);
 }
 
 .btn-save {
@@ -1697,7 +2411,12 @@ onMounted(() => {
   padding: 8px 18px;
   font-size: 0.85rem;
   font-weight: 700;
+  border-radius: 8px;
   transition: all 0.15s ease;
+}
+
+.btn-save:active {
+  transform: scale(0.96);
 }
 
 .btn-save-success {
@@ -1715,16 +2434,73 @@ onMounted(() => {
   font-weight: 600;
   cursor: pointer;
 }
+
 .btn-cancel:hover {
   background: #f1f5f9;
   color: #0f172a;
 }
 
-/* Header Dokumen yang Langsung Editable */
+/* Banner Dokumen Patokan PDF Resmi */
+.pdf-locked-banner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  background: #fef2f2;
+  border: 1px solid #fee2e2;
+  border-left: 4px solid #dc2626;
+  border-radius: 10px;
+}
+
+.locked-icon-wrap {
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  background: #fee2e2;
+  color: #dc2626;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.locked-text-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.locked-text-wrap strong {
+  font-size: 0.88rem;
+  font-weight: 700;
+  color: #991b1b;
+}
+
+.locked-text-wrap p {
+  margin: 0;
+  font-size: 0.8rem;
+  color: #7f1d1d;
+  line-height: 1.45;
+}
+
+/* Dokumen Header: Judul & Meta */
 .doc-header-block {
   display: flex;
   flex-direction: column;
   gap: 10px;
+}
+
+.doc-title-locked {
+  padding: 4px 6px;
+}
+
+.title-text-locked {
+  margin: 0;
+  font-size: 1.45rem;
+  font-weight: 800;
+  color: #0f172a;
+  letter-spacing: -0.01em;
+  word-break: break-word;
 }
 
 .doc-title-input {
@@ -1733,16 +2509,18 @@ onMounted(() => {
   font-weight: 800;
   color: #0f172a;
   border: 1px solid transparent;
-  border-radius: 8px;
+  border-radius: 10px;
   padding: 6px 10px;
   background: transparent;
   outline: none;
   transition: all 0.15s ease;
 }
+
 .doc-title-input:hover {
   background: #f8fafc;
   border-color: #cbd5e1;
 }
+
 .doc-title-input:focus {
   background: #ffffff;
   border-color: #2563eb;
@@ -1770,8 +2548,8 @@ onMounted(() => {
 }
 
 .inline-select {
-  padding: 3px 8px;
-  font-size: 0.78rem;
+  padding: 4px 10px;
+  font-size: 0.8rem;
   font-weight: 600;
   border-radius: 6px;
   border: 1px solid #cbd5e1;
@@ -1779,6 +2557,7 @@ onMounted(() => {
   color: #1e293b;
   outline: none;
 }
+
 .inline-select:focus {
   border-color: #2563eb;
   background: #ffffff;
@@ -1802,14 +2581,14 @@ onMounted(() => {
   color: #64748b;
 }
 
-/* Toolbar TipTap */
+/* Toolbar TipTap Formatting */
 .editor-toolbar {
   display: flex;
   align-items: center;
   gap: 4px;
   padding: 8px 12px;
   background: #f1f5f9;
-  border-radius: 10px 10px 0 0;
+  border-radius: 12px 12px 0 0;
   border: 1px solid #cbd5e1;
   border-bottom: none;
   flex-wrap: wrap;
@@ -1843,11 +2622,16 @@ onMounted(() => {
   min-width: 28px;
   height: 28px;
   transition: all 0.12s ease;
+  user-select: none;
 }
 
 .tb-btn:hover:not(:disabled) {
   background: #e2e8f0;
   color: #0f172a;
+}
+
+.tb-btn:active:not(:disabled) {
+  transform: scale(0.92);
 }
 
 .tb-btn.active {
@@ -1863,9 +2647,13 @@ onMounted(() => {
 /* Lembar Kertas Dokumen */
 .doc-body-wrapper {
   background: #f8fafc;
-  padding: 16px;
-  border-radius: 0 0 12px 12px;
+  padding: 14px;
+  border-radius: 12px;
   border: 1px solid #cbd5e1;
+}
+
+.editor-toolbar + .doc-body-wrapper {
+  border-radius: 0 0 12px 12px;
 }
 
 .doc-paper-sheet {
@@ -1881,6 +2669,137 @@ onMounted(() => {
   cursor: text;
 }
 
+.doc-paper-locked {
+  cursor: default !important;
+  background: #fafbfc;
+  border-color: #e2e8f0;
+}
+
+.doc-paper-locked :deep(.tiptap-editor-body) {
+  cursor: default !important;
+  user-select: text;
+}
+
+/* Container Viewer Dokumen PDF Asli Tanpa Perubahan Format */
+.pdf-viewer-wrapper {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  background: #f8fafc;
+  border-radius: 12px;
+  border: 1px solid #cbd5e1;
+  padding: 12px;
+}
+
+.pdf-quick-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 12px;
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  flex-wrap: wrap;
+}
+
+.pdf-toolbar-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #dc2626;
+  font-weight: 700;
+  font-size: 0.82rem;
+}
+
+.pdf-filename-tag {
+  color: #1e293b;
+  font-weight: 600;
+  max-width: 320px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pdf-toolbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.btn-pdf-tool {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: 6px;
+  font-size: 0.78rem;
+  font-weight: 700;
+  background: #f1f5f9;
+  color: #334155;
+  border: 1px solid #cbd5e1;
+  text-decoration: none;
+  cursor: pointer;
+  transition: all 0.12s ease;
+  user-select: none;
+}
+
+.btn-pdf-tool:hover {
+  background: #e2e8f0;
+  color: #0f172a;
+}
+
+.btn-pdf-download {
+  background: #eff6ff;
+  color: #2563eb;
+  border-color: #bfdbfe;
+}
+
+.btn-pdf-download:hover {
+  background: #dbeafe;
+}
+
+.pdf-frame-container {
+  width: 100%;
+  min-height: 640px;
+  background: #475569;
+  border-radius: 8px;
+  overflow: hidden;
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.pdf-native-frame {
+  width: 100%;
+  height: 640px;
+  border: none;
+  display: block;
+}
+
+.pdf-loading-state,
+.pdf-fallback-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  color: #f1f5f9;
+  font-size: 0.88rem;
+  padding: 40px 20px;
+}
+
+.btn-download-pdf {
+  background: #fef2f2;
+  color: #dc2626;
+  border-color: #fecaca;
+}
+
+.btn-download-pdf:hover {
+  background: #fee2e2;
+}
+
 :deep(.tiptap-editor-body) {
   outline: none;
   min-height: 350px;
@@ -1894,6 +2813,7 @@ onMounted(() => {
   border-bottom: 2px solid #e2e8f0;
   padding-bottom: 6px;
 }
+
 :deep(.tiptap-editor-body h1:first-child) {
   margin-top: 0;
 }
@@ -2002,26 +2922,191 @@ onMounted(() => {
   color: #64748b;
 }
 
+/* ══════════════════════════════════════════════════════════════════════════
+   MOBILE RESPONSIVENESS (<= 640px) - NATIVE APP LOOK & FEEL
+   ══════════════════════════════════════════════════════════════════════════ */
 @media (max-width: 640px) {
+  .templates-section-card {
+    padding: 16px 14px;
+    border-radius: 14px;
+  }
+
   .templates-header {
     flex-direction: column;
     align-items: stretch;
+    gap: 12px;
   }
+
   .header-actions-group {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
     width: 100%;
   }
-  .header-actions-group button {
-    flex: 1;
+
+  .btn-outline-upload,
+  .btn-add-template {
+    justify-content: center;
+    padding: 10px 12px;
+    font-size: 0.8rem;
+    height: 40px;
   }
+
+  .search-field {
+    font-size: 16px; /* Cegah auto-zoom iOS */
+    padding: 10px 36px 10px 38px;
+  }
+
+  .templates-grid {
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+
+  .template-card {
+    padding: 14px;
+  }
+
+  .tcard-title {
+    font-size: 0.94rem;
+  }
+
+  /* Document View on Mobile */
+  .inline-document-card {
+    padding: 16px 12px 90px; /* ruang bawah aman untuk mobile dock */
+    border-radius: 14px;
+  }
+
   .inline-nav-bar {
+    align-items: center;
+    gap: 8px;
+    padding-bottom: 10px;
+  }
+
+  .btn-back-link {
+    padding: 6px 8px;
+    font-size: 0.82rem;
+  }
+
+  .btn-text-responsive {
+    display: none; /* Sembunyikan teks label, tampilkan icon pada layar sempit */
+  }
+
+  .doc-title-input {
+    font-size: 1.2rem;
+    padding: 4px 6px;
+  }
+
+  .title-text-locked {
+    font-size: 1.2rem;
+    padding: 0;
+  }
+
+  .pdf-locked-banner {
+    padding: 10px 12px;
+    gap: 10px;
+  }
+
+  .locked-icon-wrap {
+    width: 32px;
+    height: 32px;
+  }
+
+  .pdf-native-frame {
+    height: 480px;
+  }
+
+  .pdf-quick-toolbar {
     flex-direction: column;
     align-items: stretch;
+    gap: 8px;
   }
-  .inline-actions-group {
-    justify-content: flex-start;
+
+  .pdf-toolbar-actions {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 6px;
   }
+
+  .btn-pdf-tool {
+    justify-content: center;
+    padding: 8px 10px;
+  }
+
+  /* Sticky Horizontal Formatting Toolbar on Mobile */
+  .editor-toolbar {
+    overflow-x: auto;
+    white-space: nowrap;
+    flex-wrap: nowrap;
+    padding: 8px 6px;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+    position: sticky;
+    top: 56px;
+    z-index: 20;
+    background: rgba(241, 245, 249, 0.98);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    border-radius: 10px 10px 0 0;
+  }
+
+  .editor-toolbar::-webkit-scrollbar {
+    display: none;
+  }
+
+  .tb-btn {
+    min-width: 32px;
+    height: 32px;
+  }
+
+  .doc-body-wrapper {
+    padding: 6px;
+  }
+
   .doc-paper-sheet {
-    padding: 18px;
+    padding: 16px 12px;
+    font-size: 0.92rem;
+    min-height: 320px;
+  }
+
+  :deep(.tiptap-editor-body) {
+    min-height: 280px;
+  }
+
+  /* Floating Bottom Dock on Mobile (Above Bottom Nav) */
+  .doc-footer-bar {
+    position: fixed;
+    bottom: 68px;
+    left: 12px;
+    right: 12px;
+    background: rgba(255, 255, 255, 0.96);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border: 1px solid #cbd5e1;
+    border-radius: 14px;
+    padding: 8px 12px;
+    box-shadow: 0 8px 24px rgba(15, 23, 42, 0.15);
+    z-index: 980;
+    margin: 0;
+  }
+
+  .footer-left-info {
+    display: none;
+  }
+
+  .doc-footer-bar .inline-actions-group {
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  .doc-footer-bar .btn-save,
+  .doc-footer-bar .btn-copy-prominent {
+    flex: 1;
+    justify-content: center;
+    height: 40px;
+  }
+
+  .doc-footer-bar .btn-cancel {
+    height: 40px;
   }
 }
 </style>
