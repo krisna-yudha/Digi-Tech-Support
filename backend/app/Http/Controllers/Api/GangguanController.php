@@ -4,6 +4,8 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\Gangguan;
+use App\Models\GangguanAffectedAgent;
+use App\Services\SpikeDetectorService;
 use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -20,8 +22,14 @@ class GangguanController extends Controller
         $sortDir  = request('sort_dir') === 'asc' ? 'asc' : 'desc';
         $perPage  = min((int) request('per_page', 10), 100);
 
-        $query = Gangguan::with(['creator:id,name', 'assignee:id,name'])
-            ->orderBy($sortBy, $sortDir);
+        $query = Gangguan::with([
+            'creator:id,name',
+            'assignee:id,name',
+            'parent:id,ticket_number,judul,status',
+            'children:id,ticket_number,judul,status,created_by,created_at',
+            'children.creator:id,name',
+            'affectedAgents:id,gangguan_id,user_id,agent_name,cubicle_name'
+        ])->orderBy($sortBy, $sortDir);
 
         if (request()->filled('status')) {
             $query->where('status', request('status'));
@@ -74,38 +82,41 @@ class GangguanController extends Controller
         $this->requireRoles($request, ['Agent', 'TS', 'Admin']);
 
         $payload = $request->validate([
-            'cubicle' => ['required', 'string', 'max:100'],
-            'agent_name' => ['required', 'string', 'max:255'],
-            'problem' => ['required', 'string'],
-            'judul' => ['nullable', 'string', 'max:255'],
-            'deskripsi' => ['nullable', 'string'],
-            'status' => ['nullable', 'string', 'max:50'],
+            'cubicle'        => ['required', 'string', 'max:100'],
+            'agent_name'     => ['required', 'string', 'max:255'],
+            'problem'        => ['required', 'string'],
+            'judul'          => ['nullable', 'string', 'max:255'],
+            'deskripsi'      => ['nullable', 'string'],
+            'status'         => ['nullable', 'string', 'max:50'],
             'jenis_gangguan' => ['nullable', 'string', 'in:Personal,Massal'],
-            'kategori' => ['nullable', 'string', 'max:100'],
-            'priority' => ['nullable', 'in:low,medium,high'],
-            'assigned_to' => ['nullable', 'exists:users,id'],
-            'start_time' => ['nullable', 'date'],
-            'end_time' => ['nullable', 'date', 'after_or_equal:start_time'],
+            'kategori'       => ['nullable', 'string', 'max:100'],
+            'priority'       => ['nullable', 'in:low,medium,high'],
+            'assigned_to'    => ['nullable', 'exists:users,id'],
+            'start_time'     => ['nullable', 'date'],
+            'end_time'       => ['nullable', 'date', 'after_or_equal:start_time'],
         ]);
 
-        $cubicle = $payload['cubicle'];
+        $cubicle   = $payload['cubicle'];
         $agentName = $payload['agent_name'];
-        $problem = $payload['problem'];
+        $problem   = $payload['problem'];
 
-        $payload['judul'] = $payload['judul'] ?? "Gangguan {$cubicle} - {$agentName}";
-        $payload['deskripsi'] = $payload['deskripsi'] ?? "Cubicle: {$cubicle}\nAgent: {$agentName}\nProblem: {$problem}";
-        $payload['kategori'] = $payload['kategori'] ?? $cubicle;
-        $payload['ticket_number'] = $this->generateTicketNumber();
-        $payload['created_by'] = $request->user()->id;
-        $payload['status'] = $payload['status'] ?? 'open';
+        $payload['judul']          = $payload['judul'] ?? "Gangguan {$cubicle} - {$agentName}";
+        $payload['deskripsi']      = $payload['deskripsi'] ?? "Cubicle: {$cubicle}\nAgent: {$agentName}\nProblem: {$problem}";
+        $payload['kategori']       = $payload['kategori'] ?? $cubicle;
+        $payload['ticket_number']  = $this->generateTicketNumber();
+        $payload['created_by']     = $request->user()->id;
+        $payload['status']         = $payload['status'] ?? 'open';
         $payload['jenis_gangguan'] = $payload['jenis_gangguan'] ?? 'Personal';
-        $payload['priority'] = $payload['priority'] ?? 'medium';
-        $payload['start_time'] = $payload['start_time'] ?? now();
-        $payload['durasi'] = $this->calculateDuration($payload['start_time'] ?? null, $payload['end_time'] ?? null);
+        $payload['priority']       = $payload['priority'] ?? 'medium';
+        $payload['start_time']     = $payload['start_time'] ?? now();
+        $payload['durasi']         = $this->calculateDuration($payload['start_time'] ?? null, $payload['end_time'] ?? null);
 
         unset($payload['cubicle'], $payload['agent_name'], $payload['problem']);
 
         $gangguan = Gangguan::create($payload);
+
+        // Evaluate Spike / Anomaly Detection for Mass Outage
+        app(SpikeDetectorService::class)->evaluate($gangguan);
 
         return response()->json($gangguan, 201);
     }
@@ -122,7 +133,17 @@ class GangguanController extends Controller
             ]);
         }
 
-        $gangguan->load(['creator:id,name', 'assignee:id,name,signature', 'reader:id,name', 'resolver:id,name', 'evidences']);
+        $gangguan->load([
+            'creator:id,name',
+            'assignee:id,name,signature',
+            'reader:id,name',
+            'resolver:id,name',
+            'evidences',
+            'parent:id,ticket_number,judul,status,kategori',
+            'children:id,ticket_number,judul,status,created_by,created_at,kategori',
+            'children.creator:id,name',
+            'affectedAgents.user:id,name'
+        ]);
 
         $cubicleName = '';
         if ($gangguan->deskripsi && preg_match('/Cubicle:\s*([^\n]+)/i', $gangguan->deskripsi, $matches)) {
@@ -147,14 +168,17 @@ class GangguanController extends Controller
     {
         $this->requireRoles($request, ['Agent']);
 
-        // Pastikan laporan ini milik agent yang sedang login
+        // Pastikan laporan ini milik agent yang sedang login atau agent tercatat sebagai affected agent
+        $isCreator = $gangguan->created_by === $request->user()->id;
+        $isAffected = $gangguan->affectedAgents()->where('user_id', $request->user()->id)->exists();
+
         abort_unless(
-            $gangguan->created_by === $request->user()->id,
+            $isCreator || $isAffected,
             403,
             'Anda tidak memiliki akses ke laporan ini.'
         );
 
-        $gangguan->load(['evidences']);
+        $gangguan->load(['evidences', 'parent:id,ticket_number,judul,status', 'affectedAgents.user:id,name']);
 
         return response()->json($gangguan);
     }
@@ -164,14 +188,14 @@ class GangguanController extends Controller
         $this->requireRoles($request, ['TS', 'Admin']);
 
         $payload = $request->validate([
-            'judul'      => ['sometimes', 'required', 'string', 'max:255'],
-            'deskripsi'  => ['sometimes', 'required', 'string'],
-            'status'     => ['sometimes', 'required', 'string', 'max:50'],
-            'kategori'   => ['sometimes', 'required', 'string', 'max:100'],
-            'priority'   => ['sometimes', 'required', 'in:low,medium,high'],
-            'assigned_to'=> ['nullable', 'exists:users,id'],
-            'start_time' => ['nullable', 'date'],
-            'end_time'   => ['nullable', 'date', 'after_or_equal:start_time'],
+            'judul'                  => ['sometimes', 'required', 'string', 'max:255'],
+            'deskripsi'              => ['sometimes', 'required', 'string'],
+            'status'                 => ['sometimes', 'required', 'string', 'max:50'],
+            'kategori'               => ['sometimes', 'required', 'string', 'max:100'],
+            'priority'               => ['sometimes', 'required', 'in:low,medium,high'],
+            'assigned_to'            => ['nullable', 'exists:users,id'],
+            'start_time'             => ['nullable', 'date'],
+            'end_time'               => ['nullable', 'date', 'after_or_equal:start_time'],
             'penyebab_permasalahan' => ['nullable', 'string'],
             'penyelesaian_masalah'  => ['nullable', 'string'],
             'impact'                => ['nullable', 'string'],
@@ -180,6 +204,7 @@ class GangguanController extends Controller
             'nomor_surat'           => ['nullable', 'string'],
             'kode'                  => ['nullable', 'string'],
             'id_task_sip'           => ['nullable', 'string'],
+            'jenis_gangguan'        => ['nullable', 'string', 'in:Personal,Massal'],
         ]);
 
         $startTime = $payload['start_time'] ?? $gangguan->start_time;
@@ -214,7 +239,31 @@ class GangguanController extends Controller
 
         $gangguan->update($payload);
 
-        $gangguan = $gangguan->fresh(['creator:id,name', 'assignee:id,name,signature', 'reader:id,name', 'resolver:id,name', 'evidences']);
+        // Auto-Cascade Close to child tickets if parent ticket is closed
+        if ($newStatus === 'closed' && $gangguan->children()->exists()) {
+            $gangguan->children()->update([
+                'status'                => 'closed',
+                'resolved_at'           => $payload['resolved_at'] ?? now(),
+                'resolved_by'           => $payload['resolved_by'] ?? $request->user()->id,
+                'end_time'              => $payload['end_time'] ?? $endTime ?? now(),
+                'durasi'                => $payload['durasi'] ?? $gangguan->durasi,
+                'penyelesaian_masalah'  => $payload['penyelesaian_masalah'] ?? $gangguan->penyelesaian_masalah,
+                'penyebab_permasalahan' => $payload['penyebab_permasalahan'] ?? $gangguan->penyebab_permasalahan,
+            ]);
+        }
+
+        $gangguan = $gangguan->fresh([
+            'creator:id,name',
+            'assignee:id,name,signature',
+            'reader:id,name',
+            'resolver:id,name',
+            'evidences',
+            'parent:id,ticket_number,judul,status',
+            'children:id,ticket_number,judul,status,created_by',
+            'children.creator:id,name',
+            'affectedAgents.user:id,name'
+        ]);
+
         $cubicle = \App\Models\Cubicle::where('nama', $gangguan->kategori)->first();
         $gangguan->cubicle_ext = $cubicle->ext ?? '';
         $gangguan->cubicle_ip = $cubicle->ip ?? '';
@@ -231,6 +280,183 @@ class GangguanController extends Controller
         return response()->json([
             'message' => 'Gangguan berhasil dihapus.',
         ]);
+    }
+
+    /**
+     * Fase 1: Endpoint untuk mengambil daftar insiden massal/potensial aktif.
+     */
+    public function activeIncidents(Request $request): JsonResponse
+    {
+        $kategori = $request->query('kategori');
+        $userId   = $request->user()?->id;
+
+        $incidents = app(SpikeDetectorService::class)->getActiveIncidents($kategori, $userId);
+
+        return response()->json($incidents);
+    }
+
+    /**
+     * Fase 1: Tombol "Saya Mengalami Gangguan Ini Juga" (Me-Too).
+     */
+    public function joinIncident(Request $request, Gangguan $gangguan): JsonResponse
+    {
+        $this->requireRoles($request, ['Agent', 'TS', 'Admin']);
+
+        $validated = $request->validate([
+            'cubicle' => ['nullable', 'string', 'max:100'],
+            'notes'   => ['nullable', 'string', 'max:500'],
+        ]);
+
+        $user = $request->user();
+
+        // Cek apakah sudah pernah join
+        $exists = GangguanAffectedAgent::where('gangguan_id', $gangguan->id)
+            ->where('user_id', $user->id)
+            ->exists();
+
+        if ($exists || $gangguan->created_by === $user->id) {
+            return response()->json([
+                'message'  => 'Anda sudah terdaftar pada laporan gangguan ini.',
+                'gangguan' => $gangguan->fresh(['affectedAgents.user:id,name']),
+            ], 200);
+        }
+
+        GangguanAffectedAgent::create([
+            'gangguan_id'  => $gangguan->id,
+            'user_id'      => $user->id,
+            'agent_name'   => $user->name,
+            'cubicle_name' => $validated['cubicle'] ?? null,
+            'notes'        => $validated['notes'] ?? null,
+        ]);
+
+        // Hitung ulang total agent terdampak
+        $totalAffected = GangguanAffectedAgent::where('gangguan_id', $gangguan->id)->count() + 1;
+        $gangguan->update([
+            'jumlah_agent_terdampak' => $totalAffected,
+            'jenis_gangguan'         => 'Massal', // otomatis set massal jika sudah multi-agent
+        ]);
+
+        return response()->json([
+            'message'                => 'Berhasil mencatat Anda sebagai agent terdampak. Terima kasih!',
+            'jumlah_agent_terdampak' => $totalAffected,
+            'gangguan'               => $gangguan->fresh(['affectedAgents.user:id,name']),
+        ], 201);
+    }
+
+    /**
+     * Fase 2: Bulk Merge Sub-Tickets ke Parent Mass Ticket.
+     */
+    public function bulkMerge(Request $request): JsonResponse
+    {
+        $this->requireRoles($request, ['TS', 'Admin']);
+
+        $validated = $request->validate([
+            'parent_id'  => ['nullable', 'exists:gangguans,id'],
+            'child_ids'  => ['required', 'array', 'min:1'],
+            'child_ids.*'=> ['exists:gangguans,id'],
+            'new_parent' => ['nullable', 'array'],
+            'new_parent.judul'    => ['nullable', 'string', 'max:255'],
+            'new_parent.kategori' => ['nullable', 'string', 'max:100'],
+            'new_parent.deskripsi'=> ['nullable', 'string'],
+        ]);
+
+        $childIds = $validated['child_ids'];
+        $parent = null;
+
+        if (!empty($validated['parent_id'])) {
+            $parent = Gangguan::findOrFail($validated['parent_id']);
+        } elseif (!empty($validated['new_parent'])) {
+            // Buat parent ticket massal baru
+            $kategori = $validated['new_parent']['kategori'] ?? 'MASSAL';
+            $judul    = $validated['new_parent']['judul'] ?? "Gangguan Massal {$kategori}";
+            $desc     = $validated['new_parent']['deskripsi'] ?? "Tiket konsolidasi gangguan massal untuk kategori {$kategori}";
+
+            $parent = Gangguan::create([
+                'ticket_number'          => $this->generateTicketNumber(),
+                'judul'                  => $judul,
+                'deskripsi'              => $desc,
+                'kategori'               => $kategori,
+                'jenis_gangguan'         => 'Massal',
+                'status'                 => 'in_progress',
+                'priority'               => 'high',
+                'created_by'             => $request->user()->id,
+                'assigned_to'            => $request->user()->id,
+                'start_time'             => now(),
+                'jumlah_agent_terdampak' => count($childIds) + 1,
+            ]);
+        } else {
+            // Gunakan tiket pertama dari child_ids sebagai parent
+            $parent = Gangguan::findOrFail($childIds[0]);
+            $parent->update([
+                'jenis_gangguan' => 'Massal',
+                'priority'       => 'high',
+            ]);
+            $childIds = array_values(array_diff($childIds, [$parent->id]));
+        }
+
+        // Tautkan child tickets ke parent_id
+        if (!empty($childIds)) {
+            Gangguan::whereIn('id', $childIds)
+                ->where('id', '!=', $parent->id)
+                ->update([
+                    'parent_id'           => $parent->id,
+                    'is_potential_massal' => false,
+                ]);
+        }
+
+        // Recalculate impacted agents count
+        $childrenCount = Gangguan::where('parent_id', $parent->id)->count();
+        $affectedCount = GangguanAffectedAgent::where('gangguan_id', $parent->id)->count();
+        $totalImpacted = max($parent->jumlah_agent_terdampak ?? 1, $childrenCount + $affectedCount + 1);
+
+        $parent->update([
+            'jumlah_agent_terdampak' => $totalImpacted,
+            'is_potential_massal'    => false,
+        ]);
+
+        return response()->json([
+            'message' => 'Tiket berhasil digabungkan ke Gangguan Massal.',
+            'parent'  => $parent->fresh(['creator:id,name', 'children.creator:id,name', 'affectedAgents']),
+        ]);
+    }
+
+    /**
+     * Fase 2: Unmerge Child Ticket dari Parent.
+     */
+    public function unmerge(Request $request, Gangguan $gangguan): JsonResponse
+    {
+        $this->requireRoles($request, ['TS', 'Admin']);
+
+        $parentId = $gangguan->parent_id;
+
+        $gangguan->update(['parent_id' => null]);
+
+        if ($parentId) {
+            $parent = Gangguan::find($parentId);
+            if ($parent) {
+                $childrenCount = Gangguan::where('parent_id', $parentId)->count();
+                $affectedCount = GangguanAffectedAgent::where('gangguan_id', $parentId)->count();
+                $parent->update([
+                    'jumlah_agent_terdampak' => max(1, $childrenCount + $affectedCount + 1),
+                ]);
+            }
+        }
+
+        return response()->json([
+            'message' => 'Tiket berhasil dilepaskan dari gangguan massal.',
+        ]);
+    }
+
+    /**
+     * Fase 3: Realtime Spike Alerts untuk TS Dashboard.
+     */
+    public function spikeAlerts(Request $request): JsonResponse
+    {
+        $this->requireRoles($request, ['Admin', 'TS']);
+
+        $alerts = app(SpikeDetectorService::class)->getActiveSpikeAlerts();
+
+        return response()->json($alerts);
     }
 
     /**

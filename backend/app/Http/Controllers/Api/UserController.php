@@ -175,11 +175,13 @@ class UserController extends Controller
             return response()->json(['message' => 'Tidak ada data agent yang valid. Periksa kembali format CSV Anda.'], 422);
         }
 
-        // Flag existing users
+        // Flag existing users (case-insensitive check)
         $emails = array_column($result, 'email');
-        $existing = User::whereIn('email', $emails)->pluck('email')->toArray();
+        $lowerEmails = array_map('strtolower', $emails);
+        $existing = User::whereIn(DB::raw('LOWER(email)'), $lowerEmails)->pluck('email')->toArray();
+        $existingLower = array_map('strtolower', $existing);
         foreach ($result as &$row) {
-            $row['exists'] = in_array($row['email'], $existing);
+            $row['exists'] = in_array(strtolower($row['email']), $existingLower);
         }
 
         return response()->json([
@@ -207,15 +209,21 @@ class UserController extends Controller
         try {
             $count = 0;
             foreach ($request->input('users') as $userData) {
-                $user = User::updateOrCreate(
-                    ['email' => $userData['email']],
-                    [
-                        'name'     => $userData['name'],
-                        'gender'   => $userData['gender'] ?? '',
-                        'jabatan'  => $userData['jabatan'] ?? '',
-                        'password' => Hash::make(!empty($userData['password']) ? $userData['password'] : '12345', ['rounds' => 8]),
-                    ]
-                );
+                $email = trim($userData['email']);
+                $user = User::whereRaw('LOWER(email) = ?', [strtolower($email)])->first();
+                if (!$user) {
+                    $user = new User();
+                    $user->email = $email;
+                }
+                $user->name = $userData['name'];
+                $user->gender = $userData['gender'] ?? '';
+                $user->jabatan = $userData['jabatan'] ?? '';
+                if (!empty($userData['password'])) {
+                    $user->password = Hash::make($userData['password'], ['rounds' => 8]);
+                } elseif (!$user->exists) {
+                    $user->password = Hash::make('12345', ['rounds' => 8]);
+                }
+                $user->save();
 
                 if (!$user->hasRole('Agent')) {
                     $user->assignRole('Agent');

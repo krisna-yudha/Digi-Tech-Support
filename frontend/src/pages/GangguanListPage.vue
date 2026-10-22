@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted, ref, watch } from 'vue';
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import { useAuthStore } from '../stores/auth';
 import api from '../services/api';
@@ -97,12 +97,26 @@ const displayedItems = computed(() => {
 
 const showFilters = ref(window.innerWidth > 768);
 
-function getRowStyle(status) {
-  const s = String(status || '').toLowerCase();
-  if (s === 'open')        return 'border-left: 4px solid #ef4444;';
-  if (s === 'in_progress') return 'border-left: 4px solid #f59e0b;';
-  if (s === 'closed')      return 'border-left: 4px solid #10b981;';
-  return 'border-left: 4px solid #cbd5e1;';
+function getRowStyle(item) {
+  if (!item) return '';
+  const isMassal = item.jenis_gangguan === 'Massal' || (item.children && item.children.length > 0);
+  const s = String(item.status || '').toLowerCase();
+  
+  if (isMassal) {
+    if (s === 'open') return 'border-left: 4px solid #ef4444; background-color: #fff8f8;';
+    if (s === 'in_progress') return 'border-left: 4px solid #f59e0b; background-color: #fffdf2;';
+    if (s === 'closed') return 'border-left: 4px solid #10b981; background-color: #f8fdf9;';
+    return 'border-left: 4px solid #ef4444; background-color: #fff8f8;';
+  }
+  
+  if (item.parent_id) {
+    return 'border-left: 3px solid #94a3b8; background-color: #fbfcfe;';
+  }
+
+  if (s === 'open') return 'border-left: 3px solid #ef4444;';
+  if (s === 'in_progress') return 'border-left: 3px solid #f59e0b;';
+  if (s === 'closed') return 'border-left: 3px solid #10b981;';
+  return 'border-left: 3px solid #cbd5e1;';
 }
 
 function statusLabel(s) {
@@ -570,6 +584,121 @@ function exportExcelAll() {
   document.body.removeChild(link);
 }
 
+// ─── Multi-Select & Bulk Merge (Fase 2) ───
+const selectedTicketIds = ref([]);
+const isAllSelected = computed(() => {
+  if (!displayedItems.value.length) return false;
+  return displayedItems.value.every(item => selectedTicketIds.value.includes(item.id));
+});
+
+function toggleSelectAll(e) {
+  if (e.target.checked) {
+    selectedTicketIds.value = displayedItems.value.map(item => item.id);
+  } else {
+    selectedTicketIds.value = [];
+  }
+}
+
+function toggleSelect(id) {
+  const idx = selectedTicketIds.value.indexOf(id);
+  if (idx > -1) {
+    selectedTicketIds.value.splice(idx, 1);
+  } else {
+    selectedTicketIds.value.push(id);
+  }
+}
+
+function clearSelection() {
+  selectedTicketIds.value = [];
+}
+
+const showMergeModal = ref(false);
+const mergeMode = ref('new'); // 'new' | 'existing'
+const mergeTargetParentId = ref('');
+const mergeNewParent = ref({
+  judul: '',
+  kategori: '',
+  deskripsi: '',
+});
+const merging = ref(false);
+
+const activeMassTickets = computed(() => {
+  return (items.value || []).filter(t => t.jenis_gangguan === 'Massal' && !t.parent_id && t.status !== 'closed');
+});
+
+function openMergeModal(preselectedIds = null) {
+  if (preselectedIds && Array.isArray(preselectedIds)) {
+    selectedTicketIds.value = [...preselectedIds];
+  }
+  if (!selectedTicketIds.value.length) return;
+
+  const selectedItems = (items.value || []).filter(i => selectedTicketIds.value.includes(i.id));
+  const primaryKategori = selectedItems[0]?.kategori || 'SYSCCA';
+
+  mergeNewParent.value = {
+    judul: `Gangguan Massal ${primaryKategori}`,
+    kategori: primaryKategori,
+    deskripsi: `Konsolidasi ${selectedTicketIds.value.length} laporan gangguan dari berbagai agent/cubicle.`,
+  };
+
+  if (activeMassTickets.value.length > 0) {
+    mergeMode.value = 'existing';
+    mergeTargetParentId.value = activeMassTickets.value[0].id;
+  } else {
+    mergeMode.value = 'new';
+    mergeTargetParentId.value = '';
+  }
+
+  showMergeModal.value = true;
+}
+
+async function submitMerge() {
+  if (!selectedTicketIds.value.length) return;
+  merging.value = true;
+  try {
+    const payload = {
+      child_ids: selectedTicketIds.value,
+    };
+    if (mergeMode.value === 'existing' && mergeTargetParentId.value) {
+      payload.parent_id = mergeTargetParentId.value;
+    } else {
+      payload.new_parent = mergeNewParent.value;
+    }
+
+    await api.post('/gangguan/bulk-merge', payload);
+    showMergeModal.value = false;
+    clearSelection();
+    await fetchGangguan(page.value);
+    await fetchSpikeAlerts();
+  } catch (err) {
+    alert(err.response?.data?.message || 'Gagal menggabungkan tiket.');
+  } finally {
+    merging.value = false;
+  }
+}
+
+// ─── Realtime Spike Alerts (Fase 3) ───
+const spikeAlerts = ref([]);
+const loadingSpikes = ref(false);
+let spikeInterval = null;
+
+async function fetchSpikeAlerts() {
+  if (!auth.hasRole('TS') && !auth.hasRole('Admin')) return;
+  loadingSpikes.value = true;
+  try {
+    const { data } = await api.get('/gangguan/spike-alerts');
+    spikeAlerts.value = Array.isArray(data) ? data : [];
+  } catch (err) {
+    console.error('Failed to fetch spike alerts:', err);
+  } finally {
+    loadingSpikes.value = false;
+  }
+}
+
+function quickConvertSpikeToMassal(spike) {
+  openMergeModal(spike.ticket_ids);
+}
+
 onMounted(() => {
   if (route.query.kategori) {
     filterKategori.value = String(route.query.kategori);
@@ -583,6 +712,12 @@ onMounted(() => {
   fetchBaSettings();
   fetchGangguan();
   fetchCubicles();
+  fetchSpikeAlerts();
+  spikeInterval = setInterval(fetchSpikeAlerts, 30000);
+});
+
+onUnmounted(() => {
+  if (spikeInterval) clearInterval(spikeInterval);
 });
 
 watch(() => route.query, (q) => {
@@ -613,6 +748,37 @@ watch(() => route.query, (q) => {
           <span class="legend-pill open"><span class="dot"></span> Open</span>
           <span class="legend-pill progress"><span class="dot"></span> In Progress</span>
           <span class="legend-pill closed"><span class="dot"></span> Closed</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Realtime Spike Detection Alert Banner (Fase 3) -->
+    <div v-if="spikeAlerts.length > 0" class="spike-alert-wrap" style="grid-column: 1 / -1;">
+      <div class="spike-alert-inner">
+        <div class="spike-alert-title-row">
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <span class="spike-pulse-dot"></span>
+            <h3 style="margin: 0; font-size: 0.95rem; color: #991b1b; font-weight: 800;">
+              🚨 Peringatan Lonjakan Laporan (Potensi Gangguan Massal Terdeteksi)
+            </h3>
+          </div>
+          <button type="button" class="btn-refresh-spikes" @click="fetchSpikeAlerts" :disabled="loadingSpikes">
+            {{ loadingSpikes ? '...' : '↻ Segarkan' }}
+          </button>
+        </div>
+        <div class="spike-items-list">
+          <div v-for="spike in spikeAlerts" :key="spike.kategori" class="spike-item-row">
+            <div class="spike-item-left">
+              <span class="spike-badge-cat">{{ spike.kategori }}</span>
+              <span class="spike-badge-count">⚡ {{ spike.count }} Laporan Serupa</span>
+              <span class="spike-summary-text">
+                Terdeteksi <b>{{ spike.count }} laporan</b> pada kategori <b>{{ spike.kategori }}</b> dalam waktu berdekatan.
+              </span>
+            </div>
+            <button type="button" class="btn-quick-merge" @click="quickConvertSpikeToMassal(spike)">
+              ⚡ Buat Gangguan Massal & Gabungkan ({{ spike.count }} Tiket)
+            </button>
+          </div>
         </div>
       </div>
     </div>
@@ -688,6 +854,9 @@ watch(() => route.query, (q) => {
         <table style="width: 100%; border-collapse: collapse; white-space: nowrap; font-size: 0.85rem;">
           <thead>
             <tr style="background-color: #f8fafc; border-bottom: 1px solid #e2e8f0;">
+              <th class="th-base" style="width:36px; text-align:center;">
+                <input type="checkbox" :checked="isAllSelected" @change="toggleSelectAll" title="Pilih Semua" style="cursor: pointer;" />
+              </th>
               <th class="th-base" style="text-align:center;">No</th>
               <th class="th-sort" @click="applySort('created_at')">Hari/Tanggal <span class="sort-icon">{{ sortIcon('created_at') }}</span></th>
               <th class="th-base">Nama Agent</th>
@@ -708,28 +877,61 @@ watch(() => route.query, (q) => {
           </thead>
           <tbody>
             <tr v-for="(item, index) in displayedItems" :key="item.id" class="table-row-hover"
-              :style="`border-bottom: 1px solid #f1f5f9; ${getRowStyle(item.status)}`">
+              :class="{ 'row-massal-highlight': item.jenis_gangguan === 'Massal' || (item.children && item.children.length > 0) }"
+              :style="`border-bottom: 1px solid #f1f5f9; ${getRowStyle(item)}`">
+              <td class="td-center" style="width:36px;">
+                <input type="checkbox" :checked="selectedTicketIds.includes(item.id)" @change="toggleSelect(item.id)" style="cursor: pointer;" />
+              </td>
               <td class="td-center muted">{{ (page - 1) * perPage + index + 1 }}</td>
               <td class="td-base bold">{{ formatDateOnly(item.created_at) }}</td>
-              <td class="td-base">{{ item.jenis_gangguan === 'Massal' ? 'ALL AGENT' : (item.creator?.name || '-') }}</td>
+              <td class="td-base">
+                <span v-if="item.jenis_gangguan === 'Massal'" class="badge-agent-all">
+                  ALL AGENT
+                </span>
+                <span v-else>{{ item.creator?.name || '-' }}</span>
+              </td>
               <td class="td-center">{{ formatTimeOnly(item.start_time) }}</td>
               <td class="td-center">{{ formatTimeOnly(item.end_time) }}</td>
               <td class="td-center bold">{{ calculateDurasi(item.start_time, item.end_time) }}</td>
               <td class="td-center muted">-</td>
-              <td class="td-center">{{ item.kategori || '-' }}</td>
-              <td class="td-ellipsis" :title="item.judul">
-                <div style="display:flex; flex-direction:column; gap:4px;">
-                  <span>{{ item.judul || '-' }}</span>
-                  <span v-if="item.jenis_gangguan === 'Massal'" style="background: #fff1f2; color: #e11d48; border: 1px solid #ffe4e6; padding: 3px 8px; border-radius: 6px; width: fit-content; font-size: 0.65rem; font-weight: 700; letter-spacing: 0.05em; display: inline-flex; align-items: center; gap: 4px;">
-                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
-                    KENDALA MASSAL
+              <td class="td-center">
+                <span v-if="item.jenis_gangguan === 'Massal' && (!item.kategori || item.kategori === 'MASSAL' || item.kategori === 'Lainnya')" class="badge-cubicle-all">
+                  SEMUA
+                </span>
+                <span v-else>{{ item.kategori || '-' }}</span>
+              </td>
+              <td class="td-ellipsis td-subject" :title="item.judul">
+                <div class="subject-flex-wrap">
+                  <span v-if="item.jenis_gangguan === 'Massal'" class="badge-tag-massal" title="Gangguan Massal">
+                    <span class="badge-tag-dot"></span> MASSAL
+                  </span>
+                  <span v-else-if="item.parent" class="badge-tag-sub" :title="`Sub-tiket dari #${item.parent.ticket_number}`">
+                    ↳ Sub-tiket
+                  </span>
+                  <span v-else-if="item.is_potential_massal && !item.parent_id" class="badge-tag-spike" title="Terdeteksi lonjakan laporan serupa">
+                    ⚡ Potensi
+                  </span>
+
+                  <span class="subject-title-text" :class="{ 'title-massal': item.jenis_gangguan === 'Massal' }">
+                    {{ item.judul || '-' }}
+                  </span>
+
+                  <span v-if="item.children && item.children.length > 0" class="badge-tag-count" title="Jumlah sub-tiket terhubung">
+                    {{ item.children.length }} sub-tiket
                   </span>
                 </div>
               </td>
               <td class="td-ellipsis" :title="item.penyebab_permasalahan">{{ item.penyebab_permasalahan || '-' }}</td>
               <td class="td-ellipsis" :title="item.penyelesaian_masalah">{{ item.penyelesaian_masalah || '-' }}</td>
               <td class="td-ellipsis" :title="item.impact">{{ item.impact || '-' }}</td>
-              <td class="td-center bold" style="color:var(--primary);">{{ item.jumlah_agent_terdampak || 1 }} Agent</td>
+              <td class="td-center">
+                <span v-if="item.jenis_gangguan === 'Massal' || (item.jumlah_agent_terdampak && item.jumlah_agent_terdampak > 1)" class="badge-impacted-pill">
+                  👥 {{ item.jumlah_agent_terdampak || 1 }} Agent
+                </span>
+                <span v-else style="color:#64748b; font-size:0.8rem;">
+                  1 Agent
+                </span>
+              </td>
               <td class="td-base bold">{{ item.assignee?.name || '-' }}</td>
               <td class="td-ellipsis wide" :title="item.analisa">{{ item.analisa || '-' }}</td>
               <td class="sticky-aksi">
@@ -749,14 +951,19 @@ watch(() => route.query, (q) => {
           v-for="item in displayedItems"
           :key="'mob-' + item.id"
           class="mobile-ticket-card"
-          :style="getRowStyle(item.status)"
+          :class="{ 'mobile-massal-highlight': item.jenis_gangguan === 'Massal' || (item.children && item.children.length > 0) }"
+          :style="getRowStyle(item)"
         >
           <!-- Card Top: Status Badge, Category & Date -->
           <div class="mobile-card-top">
-            <div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
+            <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+              <input type="checkbox" :checked="selectedTicketIds.includes(item.id)" @change="toggleSelect(item.id)" style="transform: scale(1.15); cursor: pointer;" />
               <span class="mobile-badge-status" :class="item.status">{{ statusLabel(item.status) }}</span>
               <span class="mobile-category-tag">{{ item.kategori || 'General' }}</span>
-              <span v-if="item.jenis_gangguan === 'Massal'" style="background:#fff1f2;color:#e11d48;font-size:0.65rem;font-weight:800;padding:2px 6px;border-radius:4px;">MASSAL</span>
+              <span v-if="item.jenis_gangguan === 'Massal'" class="badge-tag-massal" style="font-size: 0.65rem;">
+                <span class="badge-tag-dot"></span> MASSAL
+              </span>
+              <span v-if="item.parent" class="badge-tag-sub" style="font-size: 0.65rem;">↳ Sub-tiket</span>
             </div>
             <span style="font-size:0.75rem; color:#64748b; font-weight:600;">{{ formatDateOnly(item.created_at) }}</span>
           </div>
@@ -1048,6 +1255,123 @@ watch(() => route.query, (q) => {
           <button @click="showPrintPreview = false" style="padding: 8px 16px; background: #fff; border: 1px solid #cbd5e1; border-radius: 6px; cursor: pointer; font-weight: 600;">Batal</button>
           <button v-if="!printAllMode" @click="exportExcelSingle(printableItems[0])" style="padding: 8px 16px; background: #16a34a; color: #fff; border: none; border-radius: 6px; cursor: pointer; font-weight: 600;">📊 Export Excel</button>
           <button @click="executePrint" style="padding: 8px 16px; background: #1d4ed8; color: #fff; border: none; border-radius: 6px; cursor: pointer; font-weight: 600;">🖨️ Cetak PDF</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Floating Bulk Action Bar (Fase 2) -->
+    <div v-if="selectedTicketIds.length > 0" class="bulk-floating-bar">
+      <div class="bulk-bar-inner">
+        <div class="bulk-info">
+          <span class="bulk-count-circle">{{ selectedTicketIds.length }}</span>
+          <span class="bulk-text">Tiket Dipilih</span>
+        </div>
+        <div class="bulk-actions">
+          <button type="button" class="btn-bulk-cancel" @click="clearSelection">✕ Batal</button>
+          <button type="button" class="btn-bulk-merge-action" @click="openMergeModal()">
+            🔗 Gabungkan ke Gangguan Massal (Merge)
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Bulk Merge Modal Dialog (Fase 2) -->
+    <div v-if="showMergeModal" class="modal-overlay" @click.self="showMergeModal = false">
+      <div class="modal-box" style="max-width: 520px; background: #fff; border-radius: 16px; overflow: hidden; box-shadow: 0 20px 40px rgba(0,0,0,0.25);">
+        <div class="modal-header" style="padding: 16px 20px; border-bottom: 1px solid #e2e8f0; display: flex; justify-content: space-between; align-items: center; background: #f8fafc;">
+          <div style="display: flex; align-items: center; gap: 10px;">
+            <span style="font-size: 1.5rem;">🔗</span>
+            <div>
+              <h3 style="margin: 0; font-size: 1.1rem; color: #0f172a; font-weight: 800;">Gabungkan ke Gangguan Massal</h3>
+              <p style="margin: 2px 0 0; font-size: 0.8rem; color: #64748b;">
+                Satukan <b>{{ selectedTicketIds.length }} tiket</b> terpilih ke 1 Tiket Massal Utama.
+              </p>
+            </div>
+          </div>
+          <button type="button" class="btn-close-modal" @click="showMergeModal = false" style="background:transparent; border:none; font-size:1.2rem; cursor:pointer; color:#94a3b8;">✕</button>
+        </div>
+
+        <div class="modal-body" style="padding: 20px; display: flex; flex-direction: column; gap: 16px;">
+          <!-- Tabs / Radio: Existing vs New Parent -->
+          <div class="merge-tabs">
+            <button 
+              type="button" 
+              class="merge-tab-btn" 
+              :class="{ active: mergeMode === 'new' }"
+              @click="mergeMode = 'new'"
+            >
+              ✨ Buat Tiket Massal Baru
+            </button>
+            <button 
+              type="button" 
+              class="merge-tab-btn" 
+              :class="{ active: mergeMode === 'existing' }"
+              @click="mergeMode = 'existing'"
+            >
+              📁 Gabung ke Tiket Massal Aktif
+            </button>
+          </div>
+
+          <!-- Mode A: Buat Baru -->
+          <div v-if="mergeMode === 'new'" style="display: flex; flex-direction: column; gap: 12px;">
+            <div>
+              <label style="display: block; margin-bottom: 6px; font-weight: 600; font-size: 0.85rem; color: #334155;">
+                Judul Gangguan Massal <span style="color: #ef4444;">*</span>
+              </label>
+              <input type="text" v-model="mergeNewParent.judul" class="form-input" placeholder="Contoh: Gangguan Massal SYSCCA - Login Timeout" required />
+            </div>
+
+            <div>
+              <label style="display: block; margin-bottom: 6px; font-weight: 600; font-size: 0.85rem; color: #334155;">
+                Kategori Utama
+              </label>
+              <select v-model="mergeNewParent.kategori" class="form-input">
+                <option v-for="kat in kategoriOptions" :key="kat" :value="kat">{{ kat }}</option>
+              </select>
+            </div>
+
+            <div>
+              <label style="display: block; margin-bottom: 6px; font-weight: 600; font-size: 0.85rem; color: #334155;">
+                Deskripsi Konsolidasi
+              </label>
+              <textarea v-model="mergeNewParent.deskripsi" rows="2" class="form-input" style="resize: vertical;"></textarea>
+            </div>
+          </div>
+
+          <!-- Mode B: Gabung ke yang Ada -->
+          <div v-else style="display: flex; flex-direction: column; gap: 12px;">
+            <div>
+              <label style="display: block; margin-bottom: 6px; font-weight: 600; font-size: 0.85rem; color: #334155;">
+                Pilih Tiket Gangguan Massal Target
+              </label>
+              <select v-if="activeMassTickets.length > 0" v-model="mergeTargetParentId" class="form-input">
+                <option v-for="t in activeMassTickets" :key="t.id" :value="t.id">
+                  {{ t.ticket_number }} - {{ t.judul }} ({{ t.kategori }})
+                </option>
+              </select>
+              <p v-else style="font-size: 0.85rem; color: #dc2626; margin: 4px 0;">
+                Belum ada tiket massal aktif yang berstatus open/in_progress. Silakan gunakan opsi <b>"Buat Tiket Massal Baru"</b>.
+              </p>
+            </div>
+          </div>
+
+          <!-- Summary Info Box -->
+          <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 10px 14px; font-size: 0.82rem; color: #475569; line-height: 1.4;">
+            ℹ️ <b>Info Otomasi:</b> Semua <b>{{ selectedTicketIds.length }} sub-tiket</b> akan otomatis terselesaikan (*closed*) ketika Tiket Massal ini diselesaikan oleh TS.
+          </div>
+        </div>
+
+        <div class="modal-footer" style="padding: 14px 20px; border-top: 1px solid #e2e8f0; background: #f8fafc; display: flex; justify-content: flex-end; gap: 10px;">
+          <button type="button" class="btn-ghost" @click="showMergeModal = false" style="padding: 8px 16px; border: 1px solid #cbd5e1; background: #fff; border-radius: 8px; cursor: pointer;">Batal</button>
+          <button 
+            type="button" 
+            class="btn-primary" 
+            style="padding: 9px 20px; font-weight: 700; background: #2563eb; color: #fff; border: none; border-radius: 8px; cursor: pointer;"
+            :disabled="merging || (mergeMode === 'existing' && !mergeTargetParentId)" 
+            @click="submitMerge"
+          >
+            {{ merging ? 'Menggabungkan...' : 'Konfirmasi Gabungkan Tiket' }}
+          </button>
         </div>
       </div>
     </div>
@@ -1548,6 +1872,399 @@ table { border: 1px solid #cbd5e1; }
 .ba-evidence-grid { display: flex; flex-wrap: wrap; gap: 8px; padding: 8px; justify-content: center; }
 .ba-evidence-item img { max-height: 220px; max-width: 100%; object-fit: contain; border: 1px solid #ccc; }
 .ba-evidence-empty { padding: 30px; text-align: center; color: #64748b; font-style: italic; }
+
+/* ─── Spike Alerts Banner (Fase 3) ─── */
+.spike-alert-wrap {
+  background: linear-gradient(135deg, #fef2f2 0%, #fee2e2 100%);
+  border: 1.5px solid #ef4444;
+  border-radius: 14px;
+  padding: 14px 18px;
+  box-shadow: 0 4px 15px -3px rgba(239, 68, 68, 0.18);
+  animation: fadeIn 0.3s ease-out;
+}
+
+.spike-alert-inner {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.spike-alert-title-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.spike-pulse-dot {
+  width: 10px;
+  height: 10px;
+  background-color: #dc2626;
+  border-radius: 50%;
+  display: inline-block;
+  box-shadow: 0 0 0 0 rgba(220, 38, 38, 0.7);
+  animation: pulse-red 1.5s infinite;
+}
+
+@keyframes pulse-red {
+  0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(220, 38, 38, 0.7); }
+  70% { transform: scale(1); box-shadow: 0 0 0 8px rgba(220, 38, 38, 0); }
+  100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(220, 38, 38, 0); }
+}
+
+.btn-refresh-spikes {
+  background: #ffffff;
+  border: 1px solid #fca5a5;
+  border-radius: 6px;
+  padding: 4px 10px;
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: #991b1b;
+  cursor: pointer;
+}
+
+.spike-items-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.spike-item-row {
+  background: #ffffff;
+  border: 1px solid #fca5a5;
+  border-radius: 10px;
+  padding: 10px 14px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.spike-item-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.spike-badge-cat {
+  background: #fee2e2;
+  color: #991b1b;
+  font-weight: 800;
+  font-size: 0.75rem;
+  padding: 2px 8px;
+  border-radius: 6px;
+}
+
+.spike-badge-count {
+  background: #fef08a;
+  color: #854d0e;
+  font-weight: 700;
+  font-size: 0.75rem;
+  padding: 2px 8px;
+  border-radius: 6px;
+}
+
+.spike-summary-text {
+  font-size: 0.83rem;
+  color: #334155;
+}
+
+.btn-quick-merge {
+  background: linear-gradient(135deg, #dc2626 0%, #b91c1c 100%);
+  color: #ffffff;
+  border: none;
+  border-radius: 8px;
+  padding: 7px 14px;
+  font-size: 0.8rem;
+  font-weight: 700;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: transform 0.15s;
+}
+
+.btn-quick-merge:hover {
+  transform: translateY(-1px);
+}
+
+/* ─── Modern Refined Badges for Table Rows ─── */
+.td-subject {
+  max-width: 380px;
+}
+
+.subject-flex-wrap {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.subject-title-text {
+  font-weight: 600;
+  color: #1e293b;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.subject-title-text.title-massal {
+  font-weight: 700;
+  color: #0f172a;
+}
+
+.badge-tag-massal {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: #fef2f2;
+  color: #dc2626;
+  border: 1px solid #fca5a5;
+  font-size: 0.67rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  padding: 1.5px 6px;
+  border-radius: 4px;
+  flex-shrink: 0;
+  line-height: 1.2;
+}
+
+.badge-tag-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #dc2626;
+  display: inline-block;
+  box-shadow: 0 0 0 1.5px rgba(220, 38, 38, 0.2);
+}
+
+.badge-tag-sub {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  background: #eff6ff;
+  color: #2563eb;
+  border: 1px solid #bfdbfe;
+  font-size: 0.67rem;
+  font-weight: 700;
+  padding: 1.5px 6px;
+  border-radius: 4px;
+  flex-shrink: 0;
+  line-height: 1.2;
+}
+
+.badge-tag-spike {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  background: #fef3c7;
+  color: #b45309;
+  border: 1px solid #fde68a;
+  font-size: 0.67rem;
+  font-weight: 700;
+  padding: 1.5px 6px;
+  border-radius: 4px;
+  flex-shrink: 0;
+  line-height: 1.2;
+}
+
+.badge-tag-count {
+  display: inline-flex;
+  align-items: center;
+  background: #f1f5f9;
+  color: #475569;
+  border: 1px solid #e2e8f0;
+  font-size: 0.68rem;
+  font-weight: 700;
+  padding: 1px 6px;
+  border-radius: 10px;
+  flex-shrink: 0;
+  line-height: 1.2;
+}
+
+.badge-agent-all {
+  display: inline-block;
+  background: #f1f5f9;
+  color: #475569;
+  border: 1px solid #e2e8f0;
+  font-weight: 700;
+  font-size: 0.72rem;
+  padding: 2px 7px;
+  border-radius: 4px;
+  letter-spacing: 0.02em;
+}
+
+.badge-cubicle-all {
+  display: inline-block;
+  background: #f1f5f9;
+  color: #475569;
+  border: 1px solid #e2e8f0;
+  font-weight: 700;
+  font-size: 0.72rem;
+  padding: 2px 7px;
+  border-radius: 4px;
+}
+
+.badge-impacted-pill {
+  display: inline-block;
+  background: #fef2f2;
+  color: #dc2626;
+  border: 1px solid #fecaca;
+  font-weight: 700;
+  font-size: 0.72rem;
+  padding: 1.5px 7px;
+  border-radius: 999px;
+}
+
+.row-massal-highlight {
+  background-color: #fff8f8 !important;
+}
+
+.row-massal-highlight:hover {
+  background-color: #fef2f2 !important;
+}
+
+.mobile-massal-highlight {
+  border-left: 4px solid #ef4444 !important;
+  background: #fff8f8 !important;
+}
+
+.badge-massal-child {
+  background: #eff6ff;
+  color: #1d4ed8;
+  border: 1px solid #dbeafe;
+  padding: 2px 7px;
+  border-radius: 6px;
+  font-size: 0.68rem;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.badge-potential-massal {
+  background: #fef3c7;
+  color: #b45309;
+  border: 1px solid #fde68a;
+  padding: 2px 7px;
+  border-radius: 6px;
+  font-size: 0.68rem;
+  font-weight: 700;
+}
+
+/* ─── Floating Bulk Action Bar (Fase 2) ─── */
+.bulk-floating-bar {
+  position: fixed;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 999;
+  width: 90%;
+  max-width: 580px;
+  background: #0f172a;
+  color: #ffffff;
+  padding: 12px 18px;
+  border-radius: 999px;
+  box-shadow: 0 14px 30px rgba(0, 0, 0, 0.35);
+  animation: floatUp 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes floatUp {
+  from { opacity: 0; transform: translate(-50%, 20px); }
+  to { opacity: 1; transform: translate(-50%, 0); }
+}
+
+.bulk-bar-inner {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+
+.bulk-info {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.bulk-count-circle {
+  background: #2563eb;
+  color: #ffffff;
+  font-weight: 800;
+  font-size: 0.85rem;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.bulk-text {
+  font-size: 0.86rem;
+  font-weight: 600;
+}
+
+.bulk-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.btn-bulk-cancel {
+  background: transparent;
+  color: #94a3b8;
+  border: none;
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 6px 10px;
+  border-radius: 6px;
+}
+.btn-bulk-cancel:hover { color: #ffffff; }
+
+.btn-bulk-merge-action {
+  background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%);
+  color: #ffffff;
+  border: none;
+  border-radius: 999px;
+  padding: 8px 16px;
+  font-size: 0.82rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: transform 0.15s;
+}
+.btn-bulk-merge-action:hover {
+  transform: scale(1.03);
+}
+
+/* ─── Merge Tabs ─── */
+.merge-tabs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  background: #f1f5f9;
+  padding: 4px;
+  border-radius: 10px;
+}
+
+.merge-tab-btn {
+  padding: 8px 12px;
+  border-radius: 8px;
+  border: none;
+  background: transparent;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: #64748b;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.merge-tab-btn.active {
+  background: #ffffff;
+  color: #2563eb;
+  font-weight: 700;
+  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.08);
+}
 </style>
 
 <style>

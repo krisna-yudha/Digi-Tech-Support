@@ -169,6 +169,7 @@ onMounted(async () => {
 
   window.addEventListener('paste', handlePaste);
   document.addEventListener('click', handleClickOutside);
+  fetchActiveIncidents();
 });
 
 onUnmounted(() => {
@@ -218,6 +219,61 @@ function handlePaste(e) {
   }
 }
 
+// ─── Active Incidents & Me-Too Mitigation (Fase 1) ───
+const activeIncidents = ref([]);
+const checkingIncidents = ref(false);
+const showJoinModal = ref(false);
+const selectedIncidentToJoin = ref(null);
+const joinCubicle = ref('');
+const joinNotes = ref('');
+const joiningIncidentId = ref(null);
+
+async function fetchActiveIncidents(kat = '') {
+  checkingIncidents.value = true;
+  try {
+    const { data } = await api.get('/gangguan/active-incidents', {
+      params: { kategori: kat || undefined }
+    });
+    activeIncidents.value = Array.isArray(data) ? data : [];
+  } catch (err) {
+    console.error('Failed to fetch active incidents:', err);
+  } finally {
+    checkingIncidents.value = false;
+  }
+}
+
+watch(() => form.kategori, (newKat) => {
+  fetchActiveIncidents(newKat);
+});
+
+function openJoinModal(inc) {
+  selectedIncidentToJoin.value = inc;
+  joinCubicle.value = form.cubicle === 'Lainnya' ? form.custom_cubicle : (form.cubicle || '');
+  joinNotes.value = '';
+  showJoinModal.value = true;
+}
+
+async function submitJoinIncident() {
+  if (!selectedIncidentToJoin.value) return;
+  joiningIncidentId.value = selectedIncidentToJoin.value.id;
+  try {
+    await api.post(`/gangguan/${selectedIncidentToJoin.value.id}/join-incident`, {
+      cubicle: joinCubicle.value || form.cubicle || 'Lainnya',
+      notes: joinNotes.value
+    });
+    showJoinModal.value = false;
+    if (auth.hasRole('Agent')) {
+      router.push({ name: 'agent-dashboard', query: { notice: 'joined-mass-incident' } });
+    } else {
+      router.push({ name: 'gangguan-list', query: { notice: 'joined-mass-incident' } });
+    }
+  } catch (err) {
+    alert(err.response?.data?.message || 'Gagal bergabung ke gangguan massal.');
+  } finally {
+    joiningIncidentId.value = null;
+  }
+}
+
 async function submit() {
   loading.value = true;
   error.value   = '';
@@ -256,6 +312,51 @@ async function submit() {
         <div>
           <h2 class="create-title">Tambah Gangguan</h2>
           <p class="create-subtitle">Isi form berikut untuk melaporkan kendala operasional secara cepat.</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- Active Mass Outage / Spike Incident Banner (Preventive UX) -->
+    <div v-if="activeIncidents.length > 0" class="incident-alert-container">
+      <div class="incident-alert-header">
+        <div class="incident-alert-title-wrap">
+          <span class="incident-pulse-dot"></span>
+          <span class="incident-alert-title">🚨 Terdeteksi Gangguan Aktif yang Sedang Ditangani TS</span>
+        </div>
+        <span class="incident-badge-count">{{ activeIncidents.length }} Gangguan Terbuka</span>
+      </div>
+      <p class="incident-alert-desc">
+        Sebelum membuat laporan baru, periksa daftar gangguan aktif di bawah ini. Jika kendala Anda sama, Anda tidak perlu mengisi form ini — cukup klik <b>"Saya Juga Terdampak"</b> untuk langsung tercatat ke tiket penanganan TS.
+      </p>
+
+      <div class="incident-items-grid">
+        <div v-for="inc in activeIncidents" :key="inc.id" class="incident-item-card">
+          <div class="incident-item-main">
+            <div class="incident-item-meta">
+              <span class="inc-kat-badge">{{ inc.kategori || 'MASSAL' }}</span>
+              <span class="inc-ticket-badge">{{ inc.ticket_number }}</span>
+              <span class="inc-status-badge" :class="inc.status">{{ inc.status === 'in_progress' ? 'SEDANG DITANGANI' : 'OPEN' }}</span>
+            </div>
+            <h4 class="incident-item-judul">{{ inc.judul }}</h4>
+            <div class="incident-item-footer">
+              <span class="inc-impacted-count">👥 <b>{{ inc.jumlah_agent_terdampak }}</b> Agent Terdampak</span>
+              <span v-if="inc.assignee_name" class="inc-assignee">🛠️ TS: {{ inc.assignee_name }}</span>
+            </div>
+          </div>
+
+          <div class="incident-item-action">
+            <div v-if="inc.has_joined" class="inc-already-joined-badge">
+              ✓ Anda Sudah Terdaftar
+            </div>
+            <button 
+              v-else 
+              type="button" 
+              class="btn-me-too" 
+              @click="openJoinModal(inc)"
+            >
+              🙋‍♂️ Saya Juga Terdampak (+1)
+            </button>
+          </div>
         </div>
       </div>
     </div>
@@ -559,6 +660,77 @@ async function submit() {
 
       </form>
     </div>
+
+    <!-- Me-Too Join Modal (Fase 1) -->
+    <div v-if="showJoinModal && selectedIncidentToJoin" class="modal-overlay" @click.self="showJoinModal = false">
+      <div class="modal-box">
+        <div class="modal-header">
+          <div style="display: flex; align-items: center; gap: 10px;">
+            <span style="font-size: 1.5rem;">🙋‍♂️</span>
+            <div>
+              <h3 style="margin: 0; font-size: 1.1rem; color: #0f172a;">Konfirmasi Saya Terdampak</h3>
+              <p style="margin: 2px 0 0; font-size: 0.82rem; color: #64748b;">
+                Tautkan diri Anda ke tiket <b>{{ selectedIncidentToJoin.ticket_number }}</b>
+              </p>
+            </div>
+          </div>
+          <button type="button" class="btn-close-modal" @click="showJoinModal = false">✕</button>
+        </div>
+
+        <div class="modal-body">
+          <div class="incident-summary-box">
+            <div style="font-weight: 700; color: #1e293b; font-size: 0.95rem; margin-bottom: 4px;">
+              {{ selectedIncidentToJoin.judul }}
+            </div>
+            <div style="display: flex; gap: 8px; font-size: 0.8rem; color: #475569; flex-wrap: wrap;">
+              <span>Kategori: <b>{{ selectedIncidentToJoin.kategori }}</b></span>
+              <span>•</span>
+              <span>Saat ini: <b>{{ selectedIncidentToJoin.jumlah_agent_terdampak }} agent</b> terdampak</span>
+              <span v-if="selectedIncidentToJoin.assignee_name">•</span>
+              <span v-if="selectedIncidentToJoin.assignee_name">TS: <b>{{ selectedIncidentToJoin.assignee_name }}</b></span>
+            </div>
+          </div>
+
+          <div style="margin-bottom: 16px;">
+            <label style="display: block; margin-bottom: 6px; font-weight: 600; font-size: 0.85rem; color: #334155;">
+              Nomor Cubicle Anda (Opsional)
+            </label>
+            <input 
+              type="text" 
+              v-model="joinCubicle" 
+              placeholder="Contoh: A-01 atau B-04" 
+              class="form-input"
+            />
+          </div>
+
+          <div style="margin-bottom: 8px;">
+            <label style="display: block; margin-bottom: 6px; font-weight: 600; font-size: 0.85rem; color: #334155;">
+              Catatan / Gejala Tambahan (Opsional)
+            </label>
+            <textarea 
+              v-model="joinNotes" 
+              rows="2" 
+              placeholder="Contoh: Aplikasi blank putih saat membuka menu tiket..." 
+              class="form-input" 
+              style="resize: vertical;"
+            ></textarea>
+          </div>
+        </div>
+
+        <div class="modal-footer">
+          <button type="button" class="btn-ghost" @click="showJoinModal = false">Batal</button>
+          <button 
+            type="button" 
+            class="btn-primary" 
+            style="padding: 9px 18px; font-weight: 700;"
+            :disabled="joiningIncidentId !== null" 
+            @click="submitJoinIncident"
+          >
+            {{ joiningIncidentId !== null ? 'Menyimpan...' : 'Konfirmasi & Catat Terdampak' }}
+          </button>
+        </div>
+      </div>
+    </div>
   </section>
 </template>
 
@@ -822,5 +994,250 @@ async function submit() {
   background: #f8fafc;
   text-align: center;
   transition: all 0.2s ease;
+}
+
+/* ─── Active Incident Banner & Me-Too Styles (Fase 1) ─── */
+.incident-alert-container {
+  background: linear-gradient(135deg, #fffbeb 0%, #fef3c7 100%);
+  border: 1.5px solid #f59e0b;
+  border-radius: 16px;
+  padding: 18px 20px;
+  box-shadow: 0 4px 20px -2px rgba(245, 158, 11, 0.15);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  animation: fadeIn 0.3s ease-out;
+}
+
+.incident-alert-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.incident-alert-title-wrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.incident-pulse-dot {
+  width: 10px;
+  height: 10px;
+  background-color: #ef4444;
+  border-radius: 50%;
+  display: inline-block;
+  box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.7);
+  animation: pulse-red 1.6s infinite;
+}
+
+@keyframes pulse-red {
+  0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.7); }
+  70% { transform: scale(1); box-shadow: 0 0 0 8px rgba(239, 68, 68, 0); }
+  100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(239, 68, 68, 0); }
+}
+
+.incident-alert-title {
+  font-weight: 800;
+  font-size: 1rem;
+  color: #92400e;
+}
+
+.incident-badge-count {
+  background: #fde68a;
+  color: #78350f;
+  font-weight: 700;
+  font-size: 0.78rem;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid #fcd34d;
+}
+
+.incident-alert-desc {
+  font-size: 0.86rem;
+  color: #78350f;
+  line-height: 1.5;
+  margin: 0;
+}
+
+.incident-items-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 4px;
+}
+
+.incident-item-card {
+  background: #ffffff;
+  border: 1px solid #fde68a;
+  border-radius: 12px;
+  padding: 14px 16px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.04);
+}
+
+.incident-item-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.incident-item-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+  flex-wrap: wrap;
+}
+
+.inc-kat-badge {
+  background: #dbeafe;
+  color: #1e40af;
+  font-size: 0.75rem;
+  font-weight: 800;
+  padding: 2px 8px;
+  border-radius: 6px;
+}
+
+.inc-ticket-badge {
+  background: #f1f5f9;
+  color: #475569;
+  font-size: 0.75rem;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: 6px;
+}
+
+.inc-status-badge {
+  font-size: 0.72rem;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: 6px;
+}
+.inc-status-badge.in_progress { background: #fef3c7; color: #92400e; }
+.inc-status-badge.open { background: #fee2e2; color: #991b1b; }
+
+.incident-item-judul {
+  margin: 0 0 6px;
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: #0f172a;
+}
+
+.incident-item-footer {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 0.8rem;
+  color: #64748b;
+  flex-wrap: wrap;
+}
+
+.btn-me-too {
+  background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
+  color: #ffffff;
+  border: none;
+  border-radius: 10px;
+  padding: 9px 16px;
+  font-weight: 700;
+  font-size: 0.85rem;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.2s ease;
+  box-shadow: 0 2px 8px rgba(217, 119, 6, 0.3);
+}
+
+.btn-me-too:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 14px rgba(217, 119, 6, 0.4);
+}
+
+.inc-already-joined-badge {
+  background: #dcfce7;
+  color: #166534;
+  font-weight: 700;
+  font-size: 0.82rem;
+  padding: 6px 12px;
+  border-radius: 8px;
+  white-space: nowrap;
+  border: 1px solid #bbf7d0;
+}
+
+/* Modal Overlay & Box */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.6);
+  backdrop-filter: blur(4px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 9999;
+  padding: 16px;
+}
+
+.modal-box {
+  background: #ffffff;
+  border-radius: 16px;
+  width: 100%;
+  max-width: 480px;
+  box-shadow: 0 20px 40px -10px rgba(0, 0, 0, 0.25);
+  overflow: hidden;
+  animation: modalScale 0.25s ease-out;
+}
+
+@keyframes modalScale {
+  from { opacity: 0; transform: scale(0.95); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+.modal-header {
+  padding: 16px 20px;
+  border-bottom: 1px solid #e2e8f0;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background: #f8fafc;
+}
+
+.btn-close-modal {
+  background: transparent;
+  border: none;
+  font-size: 1.2rem;
+  color: #94a3b8;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 6px;
+}
+.btn-close-modal:hover { background: #e2e8f0; color: #334155; }
+
+.modal-body {
+  padding: 20px;
+}
+
+.incident-summary-box {
+  background: #f1f5f9;
+  border-radius: 10px;
+  padding: 12px 14px;
+  margin-bottom: 16px;
+  border-left: 4px solid #f59e0b;
+}
+
+.modal-footer {
+  padding: 14px 20px;
+  border-top: 1px solid #e2e8f0;
+  background: #f8fafc;
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
 }
 </style>

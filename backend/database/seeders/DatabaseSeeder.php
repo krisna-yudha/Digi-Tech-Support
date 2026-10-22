@@ -32,5 +32,13 @@ class DatabaseSeeder extends Seeder
             ['name' => 'Agent', 'password' => 'password']
         );
         $agent->assignRole('Agent');
+
+        $agentInternal = User::firstOrCreate(
+            ['email' => 'agent@ts.internal'],
+            ['name' => 'Agent', 'password' => 'password']
+        );
+        $agentInternal->assignRole('Agent');
+
+        $this->call(OperationalTemplateSeeder::class);
     }
 }

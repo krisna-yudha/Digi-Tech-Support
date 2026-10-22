@@ -2,6 +2,7 @@
 import { computed, onMounted, ref } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import api from '../services/api';
+import OperationalTemplatesSection from '../components/OperationalTemplatesSection.vue';
 
 const route = useRoute();
 const router = useRouter();
@@ -11,6 +12,9 @@ const loading = ref(false);
 const successMessage = computed(() => {
   if (route.query.notice === 'report-submitted') {
     return 'Laporan gangguan berhasil dikirim.';
+  }
+  if (route.query.notice === 'joined-mass-incident') {
+    return 'Berhasil mencatat Anda sebagai agent terdampak pada Gangguan Massal.';
   }
 
   return '';
@@ -59,7 +63,7 @@ onMounted(async () => {
       <article class="card" style="display: flex; justify-content: space-between; align-items: center; gap: 12px;">
         <div>
           <h3 style="margin-bottom: 6px;">Total Laporan Terkirim</h3>
-          <p class="page-desc">Jumlah laporan yang sudah Anda submit.</p>
+          <p class="page-desc">Jumlah laporan yang sudah Anda submit / ikuti.</p>
         </div>
         <div style="min-width: 84px; padding: 10px 16px; border-radius: 14px; background: #e8f7ec; color: #146c2e; font-size: 1.8rem; font-weight: 800; text-align: center;">
           {{ loading ? '...' : (dashboard?.total_reports ?? 0) }}
@@ -75,10 +79,19 @@ onMounted(async () => {
       </article>
     </div>
 
+    <!-- Operational Templates Section (Upload DOCX/TXT, Edit, Copy, Download) -->
+    <OperationalTemplatesSection />
+
     <article class="card" style="grid-column: 1 / -1;">
       <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 16px;">
         <h3 style="margin:0;">Riwayat Laporan Terakhir</h3>
-        <RouterLink class="btn-primary" to="/gangguan/create" style="display:inline-block; font-size:0.8rem; padding:6px 12px;">+ Laporan Baru</RouterLink>
+        <RouterLink class="btn-primary" to="/gangguan/create" style="display:inline-flex; align-items:center; gap:6px; font-size:0.82rem; padding:6px 14px; text-decoration:none;">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="12" y1="5" x2="12" y2="19"></line>
+            <line x1="5" y1="12" x2="19" y2="12"></line>
+          </svg>
+          <span>Laporan Baru</span>
+        </RouterLink>
       </div>
       <div v-if="loading" style="color: var(--muted);">Memuat riwayat laporan...</div>
       <div v-else-if="dashboard?.latest_reports?.length" class="grid" style="gap: 10px;">
@@ -96,7 +109,12 @@ onMounted(async () => {
           >
             <div style="display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap;">
               <div style="flex: 1; min-width: 0;">
-                <p style="margin: 0 0 4px; font-weight: 700;">{{ (report.id_task_sip && report.id_task_sip !== '-') ? report.id_task_sip : (report.judul || report.kategori || 'Gangguan') }}</p>
+                <div style="display:flex; align-items:center; gap:8px; margin-bottom:4px;">
+                  <p style="margin: 0; font-weight: 700;">{{ (report.id_task_sip && report.id_task_sip !== '-') ? report.id_task_sip : (report.judul || report.kategori || 'Gangguan') }}</p>
+                  <span v-if="report.jenis_gangguan === 'Massal'" style="background:#fee2e2; color:#991b1b; font-size:0.7rem; font-weight:800; padding:2px 6px; border-radius:4px;">
+                    MASSAL
+                  </span>
+                </div>
                 <p style="margin: 0 0 4px; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">{{ report.judul || report.kategori || '-' }}</p>
                 <p style="margin: 0; font-size: 0.8rem; color: var(--muted);">Dibuat: {{ formatDateTime(report.created_at) }}</p>
               </div>
@@ -104,8 +122,11 @@ onMounted(async () => {
                 <span style="padding: 5px 12px; border-radius: 999px; background: #f3f4f6; font-weight: 700; font-size: 0.82rem;">
                   {{ report.status.replace(/_/g, ' ') }}
                 </span>
-                <span style="padding: 5px 12px; border-radius: 999px; background: var(--primary, #2563eb); color: #fff; font-weight: 700; font-size: 0.82rem;">
-                  Lihat →
+                <span style="display:inline-flex; align-items:center; gap:4px; padding: 5px 12px; border-radius: 999px; background: var(--primary, #2563eb); color: #fff; font-weight: 700; font-size: 0.82rem;">
+                  <span>Lihat</span>
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <polyline points="9 18 15 12 9 6"></polyline>
+                  </svg>
                 </span>
               </div>
             </div>

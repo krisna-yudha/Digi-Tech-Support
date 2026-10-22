@@ -19,20 +19,37 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('/agent/laporan/{gangguan}', [GangguanController::class, 'showForAgent']);
     });
 
+    Route::middleware('role:Agent|TS|Admin,sanctum')->group(function () {
+        // Active Incidents check & Me-Too button
+        Route::get('/gangguan/active-incidents', [GangguanController::class, 'activeIncidents']);
+        Route::post('/gangguan/{gangguan}/join-incident', [GangguanController::class, 'joinIncident']);
+        Route::post('/gangguan', [GangguanController::class, 'store']);
+        Route::get('/cubicles', [\App\Http\Controllers\Api\CubicleController::class, 'index']);
+
+        // Operational Templates (DOCX, TXT, Rich-text)
+        Route::get('/operational-templates', [\App\Http\Controllers\Api\OperationalTemplateController::class, 'index']);
+        Route::post('/operational-templates', [\App\Http\Controllers\Api\OperationalTemplateController::class, 'store']);
+        Route::get('/operational-templates/{operationalTemplate}', [\App\Http\Controllers\Api\OperationalTemplateController::class, 'show']);
+        Route::put('/operational-templates/{operationalTemplate}', [\App\Http\Controllers\Api\OperationalTemplateController::class, 'update']);
+        Route::delete('/operational-templates/{operationalTemplate}', [\App\Http\Controllers\Api\OperationalTemplateController::class, 'destroy']);
+    });
+
     Route::middleware('role:Admin|TS,sanctum')->group(function () {
+        // Spike alerts & Bulk merge (Must be above /gangguan/{gangguan})
+        Route::get('/gangguan/spike-alerts', [GangguanController::class, 'spikeAlerts']);
+        Route::post('/gangguan/bulk-merge', [GangguanController::class, 'bulkMerge']);
+        Route::post('/gangguan/{gangguan}/unmerge', [GangguanController::class, 'unmerge']);
+
         Route::get('/gangguan', [GangguanController::class, 'index']);
         Route::get('/gangguan/{gangguan}', [GangguanController::class, 'show']);
         Route::delete('/gangguan/{gangguan}', [GangguanController::class, 'destroy']);
         Route::get('/ts/my-stats', [GangguanController::class, 'myTsStats']);
+
         Route::get('/users', [\App\Http\Controllers\Api\UserController::class, 'index']);
         Route::post('/users', [\App\Http\Controllers\Api\UserController::class, 'store']);
         Route::post('/users/import/preview', [\App\Http\Controllers\Api\UserController::class, 'previewImport']);
         Route::post('/users/import', [\App\Http\Controllers\Api\UserController::class, 'importAgents']);
         Route::delete('/users/{user}', [\App\Http\Controllers\Api\UserController::class, 'destroy']);
-    });
-
-    Route::middleware('role:Agent|TS|Admin,sanctum')->group(function () {
-        Route::post('/gangguan', [GangguanController::class, 'store']);
     });
 
     Route::middleware('role:TS|Agent|Admin,sanctum')->group(function () {
@@ -69,9 +86,4 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('/settings/upload-koord-signature', [\App\Http\Controllers\Api\SettingController::class, 'uploadKoordSignature']);
         Route::delete('/settings/koord-signature', [\App\Http\Controllers\Api\SettingController::class, 'deleteKoordSignature']);
     });
-    
-    Route::middleware('role:Agent|TS|Admin,sanctum')->group(function () {
-        Route::get('/cubicles', [\App\Http\Controllers\Api\CubicleController::class, 'index']);
-    });
 });
-

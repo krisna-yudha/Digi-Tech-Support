@@ -16,7 +16,11 @@ async function submit() {
   loading.value = true;
   error.value   = '';
   try {
-    const { data } = await api.post('/login', { email: form.email, password: form.password });
+    const { data } = await api.post('/login', { 
+      email: form.email, 
+      password: form.password, 
+      remember: form.remember 
+    });
     auth.setAuth(data, form.remember);
     const roles = data.user.roles || [];
     const roleNames = roles.map(r => typeof r === 'object' ? r.name : r);

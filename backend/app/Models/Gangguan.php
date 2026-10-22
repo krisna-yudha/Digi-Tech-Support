@@ -12,6 +12,7 @@ class Gangguan extends Model
     use HasFactory;
 
     protected $fillable = [
+        'parent_id',
         'ticket_number',
         'judul',
         'deskripsi',
@@ -29,6 +30,7 @@ class Gangguan extends Model
         'resolved_by',
         'penyebab_permasalahan',
         'jenis_gangguan',
+        'is_potential_massal',
         'penyelesaian_masalah',
         'impact',
         'jumlah_agent_terdampak',
@@ -41,10 +43,11 @@ class Gangguan extends Model
     protected function casts(): array
     {
         return [
-            'start_time'  => 'datetime',
-            'end_time'    => 'datetime',
-            'read_at'     => 'datetime',
-            'resolved_at' => 'datetime',
+            'start_time'           => 'datetime',
+            'end_time'             => 'datetime',
+            'read_at'              => 'datetime',
+            'resolved_at'          => 'datetime',
+            'is_potential_massal'  => 'boolean',
         ];
     }
 
@@ -66,6 +69,21 @@ class Gangguan extends Model
     public function resolver(): BelongsTo
     {
         return $this->belongsTo(User::class, 'resolved_by');
+    }
+
+    public function parent(): BelongsTo
+    {
+        return $this->belongsTo(Gangguan::class, 'parent_id');
+    }
+
+    public function children(): HasMany
+    {
+        return $this->hasMany(Gangguan::class, 'parent_id');
+    }
+
+    public function affectedAgents(): HasMany
+    {
+        return $this->hasMany(GangguanAffectedAgent::class, 'gangguan_id');
     }
 
     public function evidences(): HasMany

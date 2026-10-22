@@ -147,6 +147,29 @@ function setNow() {
   form.value.end_time = (new Date(d - tzoffset)).toISOString().slice(0, 16);
 }
 
+// ─── Unmerge Handlers (Fase 2) ───
+async function unmergeChild(childId) {
+  if (!confirm('Apakah Anda yakin ingin melepaskan sub-tiket ini dari gangguan massal?')) return;
+  try {
+    await api.post(`/gangguan/${childId}/unmerge`);
+    await fetchDetail();
+    successMsg.value = 'Sub-tiket berhasil dilepaskan.';
+  } catch (err) {
+    errorMsg.value = err.response?.data?.message || 'Gagal melepaskan sub-tiket.';
+  }
+}
+
+async function unmergeSelf() {
+  if (!confirm('Apakah Anda yakin ingin melepaskan tiket ini dari gangguan massal?')) return;
+  try {
+    await api.post(`/gangguan/${item.value.id}/unmerge`);
+    await fetchDetail();
+    successMsg.value = 'Tiket berhasil dilepaskan dari gangguan massal.';
+  } catch (err) {
+    errorMsg.value = err.response?.data?.message || 'Gagal melepaskan tiket.';
+  }
+}
+
 // ───── update status ─────
 async function updateStatus(newStatus) {
   if (saving.value) return;
@@ -507,6 +530,31 @@ onMounted(async () => {
 
     <template v-else-if="item">
 
+      <!-- Child Ticket Notice Banner (Fase 2) -->
+      <article v-if="item.parent" class="card" style="grid-column:1/-1; background: #eff6ff; border: 1.5px solid #93c5fd; padding: 14px 18px; border-radius: 12px;">
+        <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;">
+          <div style="display:flex; align-items:center; gap:10px;">
+            <span style="font-size:1.4rem;">🔗</span>
+            <div>
+              <div style="font-weight:700; color:#1e40af; font-size:0.95rem;">
+                Tiket ini tergabung dalam Gangguan Massal: #{{ item.parent.ticket_number }} - {{ item.parent.judul }}
+              </div>
+              <p style="margin:2px 0 0; font-size:0.8rem; color:#3b82f6;">
+                Status dan kronologi tiket ini dikonsolidasikan langsung ke tiket utama tersebut.
+              </p>
+            </div>
+          </div>
+          <div style="display:flex; gap:8px;">
+            <button v-if="auth.hasRole('TS') || auth.hasRole('Admin')" type="button" class="btn-ghost" style="font-size:0.8rem; padding:6px 12px; background:#fff; border:1px solid #cbd5e1; border-radius:8px; cursor:pointer;" @click="unmergeSelf">
+              Lepaskan (Unmerge)
+            </button>
+            <RouterLink :to="`/gangguan/${item.parent.id}`" class="btn-primary" style="font-size:0.8rem; padding:6px 14px; text-decoration:none; border-radius:8px;">
+              Buka Tiket Massal Utama →
+            </RouterLink>
+          </div>
+        </div>
+      </article>
+
       <!-- HEADER: Nomor Tiket & Status -->
       <article class="card" style="grid-column:1/-1; padding: 16px 20px;">
         <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px;">
@@ -626,6 +674,82 @@ onMounted(async () => {
           </div>
         </article>
       </div>
+
+      <!-- SEKSI SUB-TIKET & AGENT TERDAMPAK (Fase 1 & 2) -->
+      <article v-if="item.jenis_gangguan === 'Massal' || (item.children && item.children.length > 0) || (item.affected_agents && item.affected_agents.length > 0)" class="card" style="grid-column:1/-1; padding: 20px;">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px; flex-wrap:wrap; gap:10px;">
+          <div>
+            <h3 style="margin:0; font-size:1.05rem; color:var(--text-main); font-weight:800; display:flex; align-items:center; gap:8px;">
+              <span>👥</span> Sub-Tiket Tergabung & Agent Terdampak
+            </h3>
+            <p style="margin:4px 0 0; font-size:0.82rem; color:var(--muted);">
+              Daftar sub-tiket yang dikonsolidasikan dan agent yang mencatatkan diri melalui tombol Me-Too.
+            </p>
+          </div>
+          <span style="background:#dbeafe; color:#1e40af; font-weight:800; font-size:0.82rem; padding:4px 12px; border-radius:999px;">
+            Total: {{ item.jumlah_agent_terdampak || ((item.children?.length || 0) + (item.affected_agents?.length || 0) + 1) }} Agent Terdampak
+          </span>
+        </div>
+
+        <!-- Sub-tickets Table -->
+        <div v-if="item.children && item.children.length > 0" style="margin-bottom:18px;">
+          <h4 style="font-size:0.88rem; font-weight:700; color:#334155; margin-bottom:8px;">
+            📋 Sub-Tiket Terhubung ({{ item.children.length }})
+          </h4>
+          <div class="table-responsive elegant-scroll" style="border:1px solid #e2e8f0; border-radius:8px; overflow:hidden;">
+            <table style="width:100%; border-collapse:collapse; font-size:0.84rem;">
+              <thead style="background:#f8fafc; border-bottom:1px solid #e2e8f0;">
+                <tr>
+                  <th style="padding:8px 12px; text-align:left;">Nomor Tiket</th>
+                  <th style="padding:8px 12px; text-align:left;">Agent Pelapor</th>
+                  <th style="padding:8px 12px; text-align:left;">Waktu Masuk</th>
+                  <th style="padding:8px 12px; text-align:center;">Status</th>
+                  <th style="padding:8px 12px; text-align:center;">Aksi</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="child in item.children" :key="child.id" style="border-bottom:1px solid #f1f5f9;">
+                  <td style="padding:8px 12px; font-weight:700;">
+                    <RouterLink :to="`/gangguan/${child.id}`" style="color:#2563eb; text-decoration:none;">
+                      {{ child.ticket_number }}
+                    </RouterLink>
+                  </td>
+                  <td style="padding:8px 12px;">{{ child.creator?.name || '-' }}</td>
+                  <td style="padding:8px 12px; color:#64748b;">{{ fmt(child.created_at) }}</td>
+                  <td style="padding:8px 12px; text-align:center;">
+                    <span :style="statusStyle(child.status)" style="padding:3px 8px; border-radius:6px; font-size:0.75rem; font-weight:700;">
+                      {{ statusLabel(child.status) }}
+                    </span>
+                  </td>
+                  <td style="padding:8px 12px; text-align:center;">
+                    <button v-if="auth.hasRole('TS') || auth.hasRole('Admin')" type="button" class="btn-ghost" style="padding:3px 8px; font-size:0.75rem; color:#dc2626; border:1px solid #fca5a5; border-radius:6px; background:#fff; cursor:pointer;" @click="unmergeChild(child.id)">
+                      Lepaskan
+                    </button>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- Me-Too Affected Agents List -->
+        <div v-if="item.affected_agents && item.affected_agents.length > 0">
+          <h4 style="font-size:0.88rem; font-weight:700; color:#334155; margin-bottom:8px;">
+            🙋‍♂️ Agent yang Lapor Terdampak ({{ item.affected_agents.length }})
+          </h4>
+          <div style="display:flex; flex-wrap:wrap; gap:8px;">
+            <div v-for="aff in item.affected_agents" :key="aff.id" style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; padding:8px 12px; font-size:0.82rem; display:flex; align-items:center; gap:8px;">
+              <span style="font-weight:700; color:#1e293b;">👤 {{ aff.agent_name || aff.user?.name }}</span>
+              <span v-if="aff.cubicle_name" style="color:#64748b; background:#f1f5f9; padding:2px 6px; border-radius:4px; font-size:0.75rem;">
+                Cubicle: {{ aff.cubicle_name }}
+              </span>
+              <span v-if="aff.notes" :title="aff.notes" style="color:#94a3b8; font-style:italic; font-size:0.75rem;">
+                "{{ aff.notes }}"
+              </span>
+            </div>
+          </div>
+        </div>
+      </article>
 
       <!-- ROW 2: Deskripsi & Penyelesaian -->
       <div style="grid-column:1/-1; display:grid; grid-template-columns:repeat(auto-fit, minmax(300px, 1fr)); gap:20px; align-items:stretch;">
