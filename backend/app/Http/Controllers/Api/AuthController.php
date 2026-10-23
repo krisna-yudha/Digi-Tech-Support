@@ -5,11 +5,13 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\Gangguan;
 use App\Models\User;
+use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Http;
 
 class AuthController extends Controller
 {
@@ -177,6 +179,72 @@ class AuthController extends Controller
             'total_reports' => $totalReports,
             'latest_status' => $latestStatus,
             'latest_reports' => $latestReports,
+        ]);
+    }
+
+    /**
+     * Hook dan sinkronisasi tanda waktu resmi dari server BMKG (JamServer.php / JamServerFD.html)
+     */
+    public function getBmkgTime(): JsonResponse
+    {
+        $startMicro = microtime(true);
+        $bmkgUrl = 'https://jam.bmkg.go.id/JamServer.php';
+        $bmkgWebUrl = 'https://jam.bmkg.go.id/JamServerFD.html';
+
+        try {
+            $response = Http::timeout(4)
+                ->withoutVerifying()
+                ->get($bmkgUrl);
+
+            if ($response->successful()) {
+                $body = $response->body();
+                // Format dari BMKG: var servertimeOBJ = new Date(2026,10-1,23,19,15,38);var TimeZone = 'WIB';
+                if (preg_match('/new Date\((\d+),\s*(\d+)(?:-1)?,\s*(\d+),\s*(\d+),\s*(\d+),\s*(\d+)\)/i', $body, $m)) {
+                    $year   = (int) $m[1];
+                    $month  = (int) $m[2];
+                    $day    = (int) $m[3];
+                    $hour   = (int) $m[4];
+                    $minute = (int) $m[5];
+                    $second = (int) $m[6];
+
+                    $tz = 'WIB';
+                    if (preg_match('/TimeZone\s*=\s*[\'"]([^\'"]+)[\'"]/i', $body, $tzMatch)) {
+                        $tz = $tzMatch[1];
+                    }
+
+                    $dt = Carbon::create($year, $month, $day, $hour, $minute, $second, 'Asia/Jakarta');
+                    $timestampMs = $dt->getTimestamp() * 1000;
+                    $latencyMs = round((microtime(true) - $startMicro) * 1000);
+
+                    return response()->json([
+                        'success'       => true,
+                        'source'        => 'bmkg',
+                        'source_name'   => 'Server Waktu BMKG RI',
+                        'url'           => $bmkgWebUrl,
+                        'timezone'      => $tz,
+                        'timestamp_ms'  => $timestampMs,
+                        'iso_time'      => $dt->toIso8601String(),
+                        'latency_ms'    => $latencyMs,
+                        'server_time'   => now('Asia/Jakarta')->toIso8601String(),
+                    ]);
+                }
+            }
+        } catch (\Throwable $e) {
+            // BMKG timeout atau offline: gunakan fallback waktu server lokal
+        }
+
+        $fallbackDt = now('Asia/Jakarta');
+        return response()->json([
+            'success'       => true,
+            'source'        => 'system_fallback',
+            'source_name'   => 'Server Sistem (NTP Sinkron)',
+            'url'           => $bmkgWebUrl,
+            'timezone'      => 'WIB',
+            'timestamp_ms'  => $fallbackDt->getTimestamp() * 1000,
+            'iso_time'      => $fallbackDt->toIso8601String(),
+            'latency_ms'    => round((microtime(true) - $startMicro) * 1000),
+            'server_time'   => $fallbackDt->toIso8601String(),
+            'notice'        => 'Server BMKG sedang tidak dapat dijangkau secara langsung, menggunakan waktu sinkronisasi cadangan.',
         ]);
     }
 }

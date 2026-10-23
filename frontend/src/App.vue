@@ -1,11 +1,40 @@
 <script setup>
-import { computed } from 'vue';
+import { computed, watch, onMounted } from 'vue';
 import { useRoute } from 'vue-router';
 import { useAuthStore } from './stores/auth';
+import { useBmkgTime } from './composables/useBmkgTime';
 
 const route = useRoute();
 const auth  = useAuthStore();
+const bmkgTime = useBmkgTime();
+
 const showNav = computed(() => route.name !== 'login');
+
+// Mulai jam BMKG dan sinkronisasi tanda waktu resmi
+onMounted(() => {
+  bmkgTime.startBmkgClock();
+});
+
+// Update title tab browser: ketika login role Agent, tampilkan jam realtime dari API BMKG (seperti referensi Time.is)
+watch(
+  [
+    () => auth.hasRole('Agent'),
+    () => bmkgTime.timeString.value,
+    () => bmkgTime.shortTimeString.value,
+    () => bmkgTime.showSecondsInTitle.value
+  ],
+  () => {
+    if (auth.hasRole('Agent')) {
+      const timeDisplay = bmkgTime.showSecondsInTitle.value
+        ? bmkgTime.timeString.value
+        : bmkgTime.shortTimeString.value;
+      document.title = `TS Monitoring ${timeDisplay}`;
+    } else {
+      document.title = 'TS Monitoring';
+    }
+  },
+  { immediate: true }
+);
 
 const navItems = computed(() => {
   if (auth.hasRole('Admin')) return [

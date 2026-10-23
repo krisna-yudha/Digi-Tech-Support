@@ -115,7 +115,15 @@ export default defineConfig(({ mode }) => {
       }
     ],
     server: {
-      port: 5173
+      port: 5173,
+      proxy: {
+        '/bmkg-proxy': {
+          target: 'https://jam.bmkg.go.id',
+          changeOrigin: true,
+          secure: false,
+          rewrite: (path) => path.replace(/^\/bmkg-proxy/, '')
+        }
+      }
     }
   };
 });

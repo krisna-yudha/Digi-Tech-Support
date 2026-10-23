@@ -10,6 +10,7 @@ use Illuminate\Support\Facades\Route;
 Route::post('/login', [AuthController::class, 'login']);
 Route::get('/evidence/{evidence}/view', [EvidenceController::class, 'view']);
 Route::get('/operational-templates/{operationalTemplate}/file', [\App\Http\Controllers\Api\OperationalTemplateController::class, 'file']);
+Route::get('/bmkg-time', [AuthController::class, 'getBmkgTime']);
 
 Route::middleware('auth:sanctum')->group(function () {
     Route::post('/logout', [AuthController::class, 'logout']);

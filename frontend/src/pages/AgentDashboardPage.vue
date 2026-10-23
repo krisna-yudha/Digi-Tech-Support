@@ -3,12 +3,23 @@ import { computed, onMounted, ref } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import api from '../services/api';
 import { useAuthStore } from '../stores/auth';
+import { useBmkgTime } from '../composables/useBmkgTime';
 
 const route = useRoute();
 const router = useRouter();
 const auth = useAuthStore();
+const bmkgTime = useBmkgTime();
 const dashboard = ref(null);
 const loading = ref(false);
+
+const lastSyncFormatted = computed(() => {
+  if (!bmkgTime.lastSyncTime.value) return 'Baru saja';
+  return bmkgTime.lastSyncTime.value.toLocaleTimeString('id-ID', {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit'
+  }) + ' WIB';
+});
 
 const successMessage = computed(() => {
   if (route.query.notice === 'report-submitted') {
@@ -79,6 +90,149 @@ onMounted(async () => {
         <span>{{ successMessage }}</span>
       </div>
       <button type="button" class="btn-dismiss-notice" @click="dismissNotice">Tutup</button>
+    </div>
+
+    <!-- ── Kartu Jam Realtime BMKG & Pemeriksaan Ketidaksesuaian Jam PC ── -->
+    <div class="agent-bmkg-card" style="grid-column: 1 / -1;">
+      <div class="bmkg-card-inner">
+        <!-- Kolom Kiri: Realtime Digital Clock & Tanggal -->
+        <div class="bmkg-clock-left">
+          <div class="bmkg-badge-row">
+            <span class="bmkg-tag">
+              <span class="bmkg-pulse-dot"></span>
+              STANDAR WAKTU OPERASIONAL
+            </span>
+            <span class="bmkg-source-tag">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="12" cy="12" r="10"></circle>
+                <line x1="2" y1="12" x2="22" y2="12"></line>
+                <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path>
+              </svg>
+              <span>{{ bmkgTime.sourceName.value }}</span>
+            </span>
+          </div>
+
+          <!-- Digital Clock Display (Ticking Realtime) -->
+          <div class="bmkg-time-display">
+            <span class="bmkg-digits">{{ bmkgTime.timeString.value }}</span>
+            <span class="bmkg-tz-badge">{{ bmkgTime.timezone.value }}</span>
+          </div>
+
+          <!-- Hari, Tanggal Lengkap & Link Sumber BMKG -->
+          <div class="bmkg-date-meta">
+            <div class="bmkg-date-item">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect>
+                <line x1="16" y1="2" x2="16" y2="6"></line>
+                <line x1="8" y1="2" x2="8" y2="6"></line>
+                <line x1="3" y1="10" x2="21" y2="10"></line>
+              </svg>
+              <span class="bmkg-date-text">{{ bmkgTime.dateString.value }}</span>
+            </div>
+
+            <span class="meta-separator">&bull;</span>
+
+            <a
+              :href="bmkgTime.bmkgUrl.value"
+              target="_blank"
+              rel="noopener noreferrer"
+              class="bmkg-web-link"
+              title="Buka Referensi Tanda Waktu Indonesia BMKG (JamServerFD.html)"
+            >
+              <span>jam.bmkg.go.id</span>
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path>
+                <polyline points="15 3 21 3 21 9"></polyline>
+                <line x1="10" y1="14" x2="21" y2="3"></line>
+              </svg>
+            </a>
+          </div>
+        </div>
+
+        <!-- Kolom Kanan: Pengecekan Ketidaksesuaian Jam PC / Device -->
+        <div class="bmkg-drift-right">
+          <div
+            class="drift-status-box"
+            :class="'drift-box-' + bmkgTime.driftDiagnosis.value.type"
+          >
+            <div class="drift-box-header">
+              <div class="drift-header-title">
+                <!-- Icon Hijau Jika Sinkron -->
+                <svg v-if="bmkgTime.driftStatus.value === 'synchronized'" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#059669" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path>
+                  <polyline points="22 4 12 14.01 9 11.01"></polyline>
+                </svg>
+                <!-- Icon Kuning Jika Ada Selisih/Ketidaksesuaian -->
+                <svg v-else width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#d97706" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path>
+                  <line x1="12" y1="9" x2="12" y2="13"></line>
+                  <line x1="12" y1="17" x2="12.01" y2="17"></line>
+                </svg>
+                <h4 class="drift-title">{{ bmkgTime.driftDiagnosis.value.title }}</h4>
+              </div>
+
+              <span class="drift-status-pill" :class="bmkgTime.driftDiagnosis.value.badgeClass">
+                {{ bmkgTime.driftDiagnosis.value.badge }}
+              </span>
+            </div>
+
+            <p class="drift-desc">
+              {{ bmkgTime.driftDiagnosis.value.desc }}
+            </p>
+
+            <div class="drift-meta-row">
+              <span class="drift-meta-item">
+                <strong>Selisih PC vs BMKG:</strong>
+                <span class="drift-diff-number" :class="{ 'drift-diff-warn': Math.abs(bmkgTime.driftSeconds.value) > 2 }">
+                  {{ bmkgTime.driftSeconds.value > 0 ? `+${bmkgTime.driftSeconds.value} dtk (PC lebih lambat)` : (bmkgTime.driftSeconds.value < 0 ? `${bmkgTime.driftSeconds.value} dtk (PC lebih cepat)` : '0 dtk (Pas)') }}
+                </span>
+              </span>
+              <span class="meta-separator">&bull;</span>
+              <span class="drift-meta-item">
+                Latency: {{ bmkgTime.latencyMs.value }} ms
+              </span>
+            </div>
+          </div>
+
+          <!-- Bottom Control Bar (Sinkronkan Ulang & Toggle Tab Title) -->
+          <div class="bmkg-controls-bar">
+            <button
+              type="button"
+              class="btn-sync-bmkg"
+              @click="bmkgTime.syncWithBmkg()"
+              :disabled="bmkgTime.isSyncing.value"
+              title="Sinkronkan ulang waktu dengan Server BMKG"
+            >
+              <svg
+                width="14"
+                height="14"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2.2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                :class="{ 'animate-spin': bmkgTime.isSyncing.value }"
+              >
+                <polyline points="23 4 23 10 17 10"></polyline>
+                <polyline points="1 20 1 14 7 14"></polyline>
+                <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
+              </svg>
+              <span>{{ bmkgTime.isSyncing.value ? 'Sinkronisasi...' : 'Sinkronkan Ulang' }}</span>
+            </button>
+
+            <!-- Toggle Detik pada Tab Title Browser -->
+            <label class="bmkg-tab-toggle" title="Pilih apakah detik ditampilkan pada judul tab browser (Time.is)">
+              <input
+                type="checkbox"
+                :checked="bmkgTime.showSecondsInTitle.value"
+                @change="bmkgTime.toggleShowSecondsInTitle()"
+              />
+              <span class="toggle-label-text">Tampilkan detik di tab browser</span>
+            </label>
+          </div>
+        </div>
+      </div>
     </div>
 
     <!-- Stat Widgets (Native Card Style) -->
@@ -566,12 +720,347 @@ onMounted(async () => {
   font-size: 0.88rem;
 }
 
+/* ─── Realtime BMKG Clock & Discrepancy Checker Card Styles ──────────────── */
+.agent-bmkg-card {
+  background: #ffffff;
+  border-radius: 16px;
+  border: 1px solid #e2e8f0;
+  box-shadow: 0 4px 20px -2px rgba(15, 23, 42, 0.05);
+  overflow: hidden;
+  position: relative;
+  transition: all 0.2s ease;
+}
+
+.agent-bmkg-card:hover {
+  border-color: #cbd5e1;
+  box-shadow: 0 8px 24px -4px rgba(15, 23, 42, 0.08);
+}
+
+.bmkg-card-inner {
+  display: grid;
+  grid-template-columns: 1fr 1.15fr;
+  gap: 24px;
+  padding: 22px 24px;
+}
+
+/* Kolom Kiri: Clock & Date */
+.bmkg-clock-left {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 8px;
+}
+
+.bmkg-badge-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.bmkg-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.68rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: #eff6ff;
+  color: #1d4ed8;
+  border: 1px solid #dbeafe;
+}
+
+.bmkg-pulse-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #10b981;
+  box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7);
+  animation: bmkgPulse 1.8s infinite;
+}
+
+@keyframes bmkgPulse {
+  0% {
+    transform: scale(0.95);
+    box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7);
+  }
+  70% {
+    transform: scale(1);
+    box-shadow: 0 0 0 6px rgba(16, 185, 129, 0);
+  }
+  100% {
+    transform: scale(0.95);
+    box-shadow: 0 0 0 0 rgba(16, 185, 129, 0);
+  }
+}
+
+.bmkg-source-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: #64748b;
+}
+
+.bmkg-time-display {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 4px 0 2px;
+}
+
+.bmkg-digits {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-size: 2.75rem;
+  font-weight: 800;
+  letter-spacing: -0.03em;
+  color: #0f172a;
+  line-height: 1;
+}
+
+.bmkg-tz-badge {
+  font-size: 0.95rem;
+  font-weight: 800;
+  color: #2563eb;
+  letter-spacing: 0.02em;
+}
+
+.bmkg-date-meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: #475569;
+  font-size: 0.85rem;
+  flex-wrap: wrap;
+}
+
+.bmkg-date-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+  color: #334155;
+}
+
+.bmkg-date-item svg {
+  color: #2563eb;
+}
+
+.meta-separator {
+  color: #cbd5e1;
+}
+
+.bmkg-web-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: #2563eb;
+  font-size: 0.8rem;
+  font-weight: 600;
+  text-decoration: none;
+  transition: all 0.15s ease;
+}
+
+.bmkg-web-link:hover {
+  color: #1d4ed8;
+  text-decoration: underline;
+}
+
+/* Kolom Kanan: Pengecekan Ketidaksesuaian Jam */
+.bmkg-drift-right {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.drift-status-box {
+  padding: 14px 16px;
+  border-radius: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  transition: all 0.2s ease;
+}
+
+.drift-box-success {
+  background: #f0fdf4;
+  border: 1px solid #bbf7d0;
+}
+
+.drift-box-warning {
+  background: #fffbeb;
+  border: 1px solid #fde68a;
+}
+
+.drift-box-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.drift-header-title {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.drift-title {
+  margin: 0;
+  font-size: 0.88rem;
+  font-weight: 700;
+  color: #0f172a;
+}
+
+.drift-status-pill {
+  font-size: 0.68rem;
+  font-weight: 800;
+  padding: 2px 8px;
+  border-radius: 999px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.badge-drift-ok {
+  background: #dcfce7;
+  color: #15803d;
+  border: 1px solid #86efac;
+}
+
+.badge-drift-warning {
+  background: #fef3c7;
+  color: #b45309;
+  border: 1px solid #fcd34d;
+}
+
+.drift-desc {
+  margin: 0;
+  font-size: 0.78rem;
+  line-height: 1.45;
+  color: #475569;
+}
+
+.drift-meta-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.72rem;
+  color: #64748b;
+  margin-top: 2px;
+}
+
+.drift-diff-number {
+  color: #059669;
+  font-weight: 700;
+}
+
+.drift-diff-warn {
+  color: #d97706 !important;
+  font-weight: 800;
+}
+
+/* Bottom Controls */
+.bmkg-controls-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding-top: 4px;
+  flex-wrap: wrap;
+}
+
+.btn-sync-bmkg {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: 8px;
+  background: #f1f5f9;
+  border: 1px solid #e2e8f0;
+  color: #334155;
+  font-size: 0.78rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.btn-sync-bmkg:hover:not(:disabled) {
+  background: #e2e8f0;
+  color: #0f172a;
+  border-color: #cbd5e1;
+}
+
+.btn-sync-bmkg:disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
+}
+
+.animate-spin {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.bmkg-tab-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.75rem;
+  color: #64748b;
+  cursor: pointer;
+  user-select: none;
+}
+
+.bmkg-tab-toggle input[type="checkbox"] {
+  cursor: pointer;
+  accent-color: #2563eb;
+}
+
+.toggle-label-text {
+  font-weight: 600;
+}
+
+@media (max-width: 860px) {
+  .bmkg-card-inner {
+    grid-template-columns: 1fr;
+    gap: 16px;
+    padding: 16px;
+  }
+  .bmkg-digits {
+    font-size: 2.2rem;
+  }
+}
+
 @media (max-width: 640px) {
   .agent-header-row {
     flex-direction: column;
     align-items: stretch;
   }
   .btn-new-report-header {
+    justify-content: center;
+  }
+  .bmkg-digits {
+    font-size: 2rem;
+  }
+  .bmkg-controls-bar {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+  }
+  .btn-sync-bmkg {
+    width: 100%;
     justify-content: center;
   }
   .agent-stat-grid {
