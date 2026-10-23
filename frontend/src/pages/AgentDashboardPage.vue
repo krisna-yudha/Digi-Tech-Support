@@ -3,7 +3,6 @@ import { computed, onMounted, ref } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import api from '../services/api';
 import { useAuthStore } from '../stores/auth';
-import OperationalTemplatesSection from '../components/OperationalTemplatesSection.vue';
 
 const route = useRoute();
 const router = useRouter();
@@ -57,7 +56,7 @@ onMounted(async () => {
           <span>Agent On Duty</span>
         </div>
         <h2 class="agent-title">Halo, {{ auth.user?.name || 'Agent' }}</h2>
-        <p class="agent-subtitle">Kelola template operasional dan pantau riwayat pelaporan gangguan pelanggan.</p>
+        <p class="agent-subtitle">Pantau status terkini dan riwayat pelaporan gangguan pelanggan.</p>
       </div>
 
       <RouterLink to="/gangguan/create" class="btn-primary btn-new-report-header">
@@ -128,8 +127,6 @@ onMounted(async () => {
       </article>
     </div>
 
-    <!-- Operational Templates Section (Upload DOCX/PDF/TXT, Direct Edit, Copy, Download) -->
-    <OperationalTemplatesSection />
 
     <!-- Riwayat Laporan Terakhir -->
     <article class="card history-section-card" style="grid-column: 1 / -1;">

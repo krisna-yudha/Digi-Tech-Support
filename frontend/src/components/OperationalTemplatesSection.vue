@@ -177,8 +177,21 @@ async function extractPdfRawText(arrayBuffer) {
 }
 
 // ─── Component State ──────────────────────────────────────────────────────────
-// Mode tampilan: 'list' (koleksi template) | 'document' (dokumen langsung terbuka & bisa langsung diedit)
-const activeView = ref('list');
+// ─── Component State & Multi-Tab System (Ala Tab Browser) ─────────────────────
+// Mode tab aktif: 'catalog' (koleksi template) | 'doc-...' | 'draft-...'
+const openTabs = ref([]); // Tab dokumen yang terbuka: [{ id, title, type, templateId, form, ... }]
+const activeTabId = ref('catalog');
+const activeView = computed(() => activeTabId.value === 'catalog' ? 'list' : 'document');
+const tabsScrollEl = ref(null);
+let draftCounter = 1;
+
+// Gulir horizontal bilah tab menggunakan scroll mouse / touchpad
+function handleTabsWheel(e) {
+  if (e.deltaY !== 0 && tabsScrollEl.value) {
+    e.preventDefault();
+    tabsScrollEl.value.scrollLeft += e.deltaY;
+  }
+}
 
 const templates = ref([]);
 const loading = ref(false);
@@ -284,10 +297,11 @@ const editor = useEditor({
   },
   onUpdate: () => {
     debouncedRefreshHeadings();
+    triggerAutoSave();
   }
 });
 
-// ─── State Navigasi Heading ala Microsoft Word (Sebelah Kanan) ────────────────
+// ─── State Navigasi Heading ala Microsoft Word (Sebelah Kiri) ─────────────────
 const showHeadingNav = ref(true);
 const navSearchQuery = ref('');
 const activeHeadingId = ref('');
@@ -297,6 +311,44 @@ const navActiveTab = ref('headings'); // 'headings' | 'stats'
 const copiedHeadingId = ref(null);
 let refreshHeadingsTimeout = null;
 let isScrollingProgrammatically = false;
+
+// ─── State Auto Save & Shortcut Ctrl+S ────────────────────────────────────────
+const autoSaveStatus = ref(''); // '' | 'unsaved' | 'saving' | 'saved' | 'error'
+const lastSavedTime = ref(null);
+let autoSaveTimeout = null;
+
+// Picu penyimpanan otomatis setelah jeda mengetik 1.8 detik
+function triggerAutoSave() {
+  if (activeView.value !== 'document' || isDocumentPdf.value) return;
+
+  const currentTab = openTabs.value.find(t => t.id === activeTabId.value);
+  if (currentTab) {
+    currentTab.isDirty = true;
+    currentTab.form.title = form.value.title;
+    currentTab.title = form.value.title || (currentTab.type === 'draft' ? 'Draft Baru' : 'Template');
+  }
+
+  // Jangan auto-save jika judul belum diisi sama sekali
+  if (!form.value.title.trim()) return;
+
+  autoSaveStatus.value = 'unsaved';
+  if (currentTab) currentTab.autoSaveStatus = 'unsaved';
+
+  if (autoSaveTimeout) clearTimeout(autoSaveTimeout);
+  autoSaveTimeout = setTimeout(() => {
+    handleSave(true); // silent auto-save
+  }, 1800);
+}
+
+// Shortcut Keyboard: Ctrl+S atau Cmd+S untuk simpan seketika
+function handleKeydown(e) {
+  if (activeView.value === 'document' && !isDocumentPdf.value) {
+    if ((e.ctrlKey || e.metaKey) && (e.key === 's' || e.key === 'S')) {
+      e.preventDefault();
+      handleSave(false);
+    }
+  }
+}
 
 // Ekstrak & index seluruh heading (H1, H2, H3, H4) di dalam editor TipTap
 function refreshHeadings() {
@@ -532,17 +584,27 @@ onMounted(() => {
   fetchTemplates();
   window.addEventListener('click', handleGlobalClick);
   window.addEventListener('scroll', handleDocumentScroll, { passive: true });
+  window.addEventListener('keydown', handleKeydown);
 });
 
 onBeforeUnmount(() => {
   window.removeEventListener('click', handleGlobalClick);
   window.removeEventListener('scroll', handleDocumentScroll);
+  window.removeEventListener('keydown', handleKeydown);
+  if (autoSaveTimeout) {
+    clearTimeout(autoSaveTimeout);
+  }
   if (refreshHeadingsTimeout) {
     clearTimeout(refreshHeadingsTimeout);
   }
   if (pdfBlobUrl.value) {
     URL.revokeObjectURL(pdfBlobUrl.value);
   }
+  openTabs.value.forEach(tab => {
+    if (tab.pdfBlobUrl) {
+      URL.revokeObjectURL(tab.pdfBlobUrl);
+    }
+  });
   if (editor.value) {
     editor.value.destroy();
   }
@@ -576,90 +638,231 @@ const filteredTemplates = computed(() => {
   });
 });
 
-// ─── Buka Dokumen: Langsung Bisa Dilihat/Diedit di Halaman (Bebas Pop-up) ───
-async function openDocument(template) {
-  const isPdf = template.original_filename?.toLowerCase().endsWith('.pdf') || false;
+// ─── Multi-Tab Logic: Berpindah, Membuka, dan Menutup Tab ──────────────────
+async function switchTab(targetId) {
+  if (activeTabId.value === targetId) return;
 
-  form.value = {
-    id: template.id,
-    title: template.title || '',
-    category: template.category || 'Umum',
-    content: template.content || '',
-    original_filename: template.original_filename || null,
-    file_path: template.file_path || null,
-    author_name: template.user?.name || 'Agent',
-    updated_at: template.updated_at
-  };
-  saveError.value = '';
-  saveSuccess.value = false;
-  activeView.value = 'document';
-
-  if (pdfBlobUrl.value) {
-    URL.revokeObjectURL(pdfBlobUrl.value);
-    pdfBlobUrl.value = '';
+  // 1. Sinkronisasi tab lama sebelum ditinggalkan
+  if (activeTabId.value !== 'catalog') {
+    const currentTab = openTabs.value.find(t => t.id === activeTabId.value);
+    if (currentTab) {
+      if (currentTab.type !== 'pdf') {
+        currentTab.form.content = editor.value ? editor.value.getHTML() : currentTab.form.content;
+      }
+      currentTab.form.title = form.value.title;
+      currentTab.title = form.value.title || currentTab.title;
+      currentTab.form.category = form.value.category;
+      currentTab.autoSaveStatus = autoSaveStatus.value;
+      currentTab.lastSavedTime = lastSavedTime.value;
+      currentTab.activeHeadingId = activeHeadingId.value;
+      currentTab.scrollPosition = window.scrollY;
+    }
   }
 
-  if (isPdf) {
-    pdfLoading.value = true;
-    try {
-      const res = await api.get(`/operational-templates/${template.id}/file`, {
-        responseType: 'blob'
-      });
-      pdfBlobUrl.value = URL.createObjectURL(new Blob([res.data], { type: 'application/pdf' }));
-    } catch (err) {
-      console.error('Gagal mengambil file PDF asli dari server:', err);
-    } finally {
-      pdfLoading.value = false;
+  // 2. Alihkan tab aktif
+  activeTabId.value = targetId;
+
+  // 3. Jika berpindah ke katalog
+  if (targetId === 'catalog') {
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+    return;
+  }
+
+  // 4. Jika berpindah ke tab dokumen
+  const targetTab = openTabs.value.find(t => t.id === targetId);
+  if (!targetTab) {
+    activeTabId.value = 'catalog';
+    return;
+  }
+
+  // Muat state tab ke reactive form
+  form.value = {
+    id: targetTab.form.id,
+    title: targetTab.form.title,
+    category: targetTab.form.category || 'Umum',
+    content: targetTab.form.content || '<p></p>',
+    original_filename: targetTab.form.original_filename,
+    file_path: targetTab.form.file_path,
+    author_name: targetTab.form.author_name || 'Agent',
+    updated_at: targetTab.form.updated_at
+  };
+
+  autoSaveStatus.value = targetTab.autoSaveStatus || '';
+  lastSavedTime.value = targetTab.lastSavedTime || null;
+  saveError.value = '';
+  saveSuccess.value = false;
+
+  // Tangani tampilan PDF
+  if (targetTab.type === 'pdf') {
+    pdfBlobUrl.value = targetTab.pdfBlobUrl || '';
+    pdfLoading.value = targetTab.pdfLoading || false;
+
+    if (!targetTab.pdfBlobUrl && targetTab.form.id) {
+      targetTab.pdfLoading = true;
+      pdfLoading.value = true;
+      try {
+        const res = await api.get(`/operational-templates/${targetTab.form.id}/file`, {
+          responseType: 'blob'
+        });
+        const url = URL.createObjectURL(new Blob([res.data], { type: 'application/pdf' }));
+        targetTab.pdfBlobUrl = url;
+        if (activeTabId.value === targetId) {
+          pdfBlobUrl.value = url;
+        }
+      } catch (err) {
+        console.error('Gagal mengambil PDF asli:', err);
+      } finally {
+        targetTab.pdfLoading = false;
+        if (activeTabId.value === targetId) {
+          pdfLoading.value = false;
+        }
+      }
     }
   } else {
+    // Non-PDF: Isi editor TipTap dan muat navigasi heading
     nextTick(() => {
       if (editor.value) {
         editor.value.setEditable(true);
-        editor.value.commands.setContent(template.content || '<p></p>');
+        editor.value.commands.setContent(targetTab.form.content || '<p></p>', false);
         refreshHeadings();
+        if (targetTab.activeHeadingId) {
+          activeHeadingId.value = targetTab.activeHeadingId;
+        }
       }
     });
   }
-  window.scrollTo({ top: 0, behavior: 'smooth' });
+
+  // Pulihkan posisi scroll
+  nextTick(() => {
+    if (targetTab.scrollPosition) {
+      window.scrollTo({ top: targetTab.scrollPosition, behavior: 'instant' });
+    } else {
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+  });
 }
 
-function openCreate() {
-  if (pdfBlobUrl.value) {
-    URL.revokeObjectURL(pdfBlobUrl.value);
-    pdfBlobUrl.value = '';
+// Buka dokumen dari katalog (klik kartu)
+async function openDocument(template) {
+  // Cek apakah dokumen ini sudah dibuka dalam salah satu tab
+  const existingTab = openTabs.value.find(t => t.templateId === template.id);
+  if (existingTab) {
+    await switchTab(existingTab.id);
+    return;
   }
 
-  form.value = {
-    id: null,
-    title: '',
-    category: 'Umum',
-    content: '<p></p>',
-    original_filename: null,
-    file_path: null,
-    author_name: auth.user?.name || 'Agent',
-    updated_at: new Date()
+  const isPdf = template.original_filename?.toLowerCase().endsWith('.pdf') || false;
+  const isDocx = template.original_filename?.toLowerCase().endsWith('.docx') || false;
+  const tabType = isPdf ? 'pdf' : (isDocx ? 'docx' : 'txt');
+
+  const tabId = `doc-${template.id}`;
+  const newTab = {
+    id: tabId,
+    title: template.title || 'Template Tanpa Judul',
+    type: tabType,
+    templateId: template.id,
+    form: {
+      id: template.id,
+      title: template.title || '',
+      category: template.category || 'Umum',
+      content: template.content || '',
+      original_filename: template.original_filename || null,
+      file_path: template.file_path || null,
+      author_name: template.user?.name || 'Agent',
+      updated_at: template.updated_at
+    },
+    pdfBlobUrl: '',
+    pdfLoading: false,
+    autoSaveStatus: '',
+    lastSavedTime: null,
+    isDirty: false,
+    activeHeadingId: '',
+    scrollPosition: 0
   };
-  saveError.value = '';
-  saveSuccess.value = false;
-  activeView.value = 'document';
+
+  openTabs.value.push(newTab);
+  await switchTab(tabId);
+}
+
+// Buka lembar draft baru dalam tab baru
+async function openCreate() {
+  const draftId = `draft-${Date.now()}`;
+  const draftNum = draftCounter++;
+  const title = `Draft Baru #${draftNum}`;
+
+  const newTab = {
+    id: draftId,
+    title,
+    type: 'draft',
+    templateId: null,
+    form: {
+      id: null,
+      title,
+      category: 'Umum',
+      content: '<p></p>',
+      original_filename: null,
+      file_path: null,
+      author_name: auth.user?.name || 'Agent',
+      updated_at: new Date()
+    },
+    pdfBlobUrl: '',
+    pdfLoading: false,
+    autoSaveStatus: '',
+    lastSavedTime: null,
+    isDirty: false,
+    activeHeadingId: '',
+    scrollPosition: 0
+  };
+
+  openTabs.value.push(newTab);
+  await switchTab(draftId);
 
   nextTick(() => {
     if (editor.value) {
-      editor.value.setEditable(true);
-      editor.value.commands.setContent('<p></p>');
       editor.value.commands.focus();
-      refreshHeadings();
     }
   });
-  window.scrollTo({ top: 0, behavior: 'smooth' });
 }
 
-function backToList() {
-  if (pdfBlobUrl.value) {
-    URL.revokeObjectURL(pdfBlobUrl.value);
-    pdfBlobUrl.value = '';
+// Tutup tab tertentu
+function closeTab(tabId, event) {
+  if (event) event.stopPropagation();
+
+  const idx = openTabs.value.findIndex(t => t.id === tabId);
+  if (idx === -1) return;
+
+  const tabToClose = openTabs.value[idx];
+
+  // Peringatan jika masih ada perubahan yang belum tersimpan
+  if (tabToClose.isDirty || tabToClose.autoSaveStatus === 'unsaved') {
+    const confirmClose = window.confirm(
+      `Template "${tabToClose.form.title || tabToClose.title}" memiliki perubahan yang belum disimpan. Tetap ingin menutup tab ini?`
+    );
+    if (!confirmClose) return;
   }
-  activeView.value = 'list';
+
+  // Bersihkan Blob URL jika ada
+  if (tabToClose.pdfBlobUrl) {
+    URL.revokeObjectURL(tabToClose.pdfBlobUrl);
+  }
+
+  // Jika tab yang ditutup sedang aktif, pindahkan ke tab terdekat atau ke katalog
+  if (activeTabId.value === tabId) {
+    if (openTabs.value.length > 1) {
+      const nextTab = idx > 0 ? openTabs.value[idx - 1] : openTabs.value[idx + 1];
+      switchTab(nextTab.id);
+    } else {
+      switchTab('catalog');
+    }
+  }
+
+  // Hapus tab dari daftar
+  openTabs.value.splice(idx, 1);
+}
+
+// Kembali ke katalog tanpa menutup tab
+function backToList() {
+  switchTab('catalog');
 }
 
 function triggerFileInput() {
@@ -701,43 +904,46 @@ async function handleFileChange(event) {
       const bodyHtml = result.value || '<p></p>';
       parsedHtml = docxHeaderHtml ? (docxHeaderHtml + bodyHtml) : bodyHtml;
 
-      // Word dapat langsung dibuka & diedit
-      form.value = {
-        id: null,
+      // Buat tab baru untuk dokumen DOCX yang diunggah
+      const fileTabId = `file-${Date.now()}`;
+      const newTab = {
+        id: fileTabId,
         title: cleanTitle,
-        category: 'Umum',
-        content: parsedHtml,
-        original_filename: fileName,
-        file_path: null,
-        author_name: auth.user?.name || 'Agent',
-        updated_at: new Date()
+        type: 'docx',
+        templateId: null,
+        form: {
+          id: null,
+          title: cleanTitle,
+          category: 'Umum',
+          content: parsedHtml,
+          original_filename: fileName,
+          file_path: null,
+          author_name: auth.user?.name || 'Agent',
+          updated_at: new Date()
+        },
+        pdfBlobUrl: '',
+        pdfLoading: false,
+        autoSaveStatus: '',
+        lastSavedTime: null,
+        isDirty: true,
+        activeHeadingId: '',
+        scrollPosition: 0
       };
-      saveError.value = '';
-      saveSuccess.value = false;
-      activeView.value = 'document';
 
-      nextTick(() => {
-        if (editor.value) {
-          editor.value.setEditable(true);
-          editor.value.commands.setContent(parsedHtml || '<p></p>');
-          refreshHeadings();
-        }
-      });
-      window.scrollTo({ top: 0, behavior: 'smooth' });
+      openTabs.value.push(newTab);
+      await switchTab(fileTabId);
 
     } else if (ext === 'pdf') {
       const arrayBuffer = await file.arrayBuffer();
-      // Ekstrak teks murni hanya untuk keperluan pencarian keyword & tombol salin
       const rawSearchText = await extractPdfRawText(arrayBuffer);
 
-      // Sesuai permintaan: Upload file PDF asli menggunakan FormData tanpa mengubah format di dalam PDF
       const formData = new FormData();
       formData.append('file', file);
       formData.append('title', cleanTitle);
       formData.append('category', 'SOP');
       formData.append('content', rawSearchText || cleanTitle);
 
-      await api.post('/operational-templates', formData, {
+      const { data: resData } = await api.post('/operational-templates', formData, {
         headers: {
           'Content-Type': 'multipart/form-data'
         }
@@ -749,34 +955,46 @@ async function handleFileChange(event) {
         uploadSuccess.value = '';
       }, 4500);
 
-      activeView.value = 'list';
+      // Otomatis buka dokumen PDF di tab baru
+      const createdItem = resData?.data || templates.value.find(t => t.title === cleanTitle);
+      if (createdItem) {
+        await openDocument(createdItem);
+      } else {
+        await switchTab('catalog');
+      }
       return;
 
     } else if (ext === 'txt' || ext === 'md') {
       const rawText = await file.text();
       parsedHtml = parsePlainTextWithHeadings(rawText);
 
-      form.value = {
-        id: null,
+      const fileTabId = `file-${Date.now()}`;
+      const newTab = {
+        id: fileTabId,
         title: cleanTitle,
-        category: 'Umum',
-        content: parsedHtml,
-        original_filename: fileName,
-        author_name: auth.user?.name || 'Agent',
-        updated_at: new Date()
+        type: 'txt',
+        templateId: null,
+        form: {
+          id: null,
+          title: cleanTitle,
+          category: 'Umum',
+          content: parsedHtml,
+          original_filename: fileName,
+          file_path: null,
+          author_name: auth.user?.name || 'Agent',
+          updated_at: new Date()
+        },
+        pdfBlobUrl: '',
+        pdfLoading: false,
+        autoSaveStatus: '',
+        lastSavedTime: null,
+        isDirty: true,
+        activeHeadingId: '',
+        scrollPosition: 0
       };
-      saveError.value = '';
-      saveSuccess.value = false;
-      activeView.value = 'document';
 
-      nextTick(() => {
-        if (editor.value) {
-          editor.value.setEditable(true);
-          editor.value.commands.setContent(parsedHtml || '<p></p>');
-          refreshHeadings();
-        }
-      });
-      window.scrollTo({ top: 0, behavior: 'smooth' });
+      openTabs.value.push(newTab);
+      await switchTab(fileTabId);
     } else {
       uploadError.value = 'Format file tidak didukung. Harap upload dokumen .docx, .pdf, .txt, atau .md';
       return;
@@ -789,13 +1007,14 @@ async function handleFileChange(event) {
   }
 }
 
-// Simpan Dokumen Langsung dari Halaman
-async function handleSave() {
-  saveError.value = '';
-  saveSuccess.value = false;
+// Simpan Dokumen Langsung dari Halaman (Mendukung Simpan Manual & Auto-Save Latar Belakang)
+async function handleSave(isSilent = false) {
+  if (autoSaveTimeout) {
+    clearTimeout(autoSaveTimeout);
+  }
 
   if (isDocumentPdf.value) {
-    saveError.value = 'Dokumen patokan PDF bersifat baku dan tidak dapat diubah.';
+    if (!isSilent) saveError.value = 'Dokumen patokan PDF bersifat baku dan tidak dapat diubah.';
     return;
   }
 
@@ -803,16 +1022,23 @@ async function handleSave() {
   const plainText = editor.value ? editor.value.getText().trim() : '';
 
   if (!form.value.title.trim()) {
-    saveError.value = 'Judul template wajib diisi.';
+    if (!isSilent) saveError.value = 'Judul template wajib diisi.';
     return;
   }
 
   if (!plainText && (!htmlContent || htmlContent === '<p></p>')) {
-    saveError.value = 'Konten template tidak boleh kosong.';
+    if (!isSilent) saveError.value = 'Konten template tidak boleh kosong.';
     return;
   }
 
-  saving.value = true;
+  if (isSilent) {
+    autoSaveStatus.value = 'saving';
+  } else {
+    saving.value = true;
+    saveError.value = '';
+    saveSuccess.value = false;
+  }
+
   try {
     const payload = {
       title: form.value.title.trim(),
@@ -838,20 +1064,50 @@ async function handleSave() {
       form.value.author_name = savedItem.user?.name || form.value.author_name;
     }
 
-    saveSuccess.value = true;
-    setTimeout(() => {
-      saveSuccess.value = false;
-    }, 2500);
+    const now = new Date();
+    lastSavedTime.value = now.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    autoSaveStatus.value = 'saved';
+
+    // Perbarui data tab aktif di openTabs
+    const currentTab = openTabs.value.find(t => t.id === activeTabId.value);
+    if (currentTab) {
+      currentTab.templateId = savedItem?.id || form.value.id;
+      currentTab.form.id = savedItem?.id || form.value.id;
+      currentTab.form.updated_at = form.value.updated_at;
+      currentTab.form.author_name = form.value.author_name;
+      currentTab.form.title = form.value.title;
+      currentTab.title = form.value.title;
+      currentTab.form.content = htmlContent;
+      currentTab.isDirty = false;
+      currentTab.autoSaveStatus = 'saved';
+      currentTab.lastSavedTime = lastSavedTime.value;
+      if (currentTab.type === 'draft') {
+        currentTab.type = currentTab.form.original_filename?.toLowerCase().endsWith('.docx') ? 'docx' : 'txt';
+      }
+    }
+
+    if (!isSilent) {
+      saveSuccess.value = true;
+      setTimeout(() => {
+        saveSuccess.value = false;
+      }, 2500);
+    }
 
     await fetchTemplates();
   } catch (err) {
-    if (err.response?.status === 401) {
-      saveError.value = 'Sesi login Anda belum terdaftar di backend lokal. Silakan klik Logout di pojok kanan atas lalu Login kembali.';
-    } else {
-      saveError.value = err.response?.data?.message || 'Gagal menyimpan template operasional.';
+    console.error('Gagal menyimpan template:', err);
+    autoSaveStatus.value = 'error';
+    if (!isSilent) {
+      if (err.response?.status === 401) {
+        saveError.value = 'Sesi login Anda belum terdaftar di backend lokal. Silakan klik Logout di pojok kanan atas lalu Login kembali.';
+      } else {
+        saveError.value = err.response?.data?.message || 'Gagal menyimpan template operasional.';
+      }
     }
   } finally {
-    saving.value = false;
+    if (!isSilent) {
+      saving.value = false;
+    }
   }
 }
 
@@ -997,14 +1253,14 @@ function downloadAsDocx(template) {
 // Hapus dokumen aktif
 async function deleteActiveDocument() {
   if (!form.value.id) {
-    backToList();
+    closeTab(activeTabId.value);
     return;
   }
   if (!confirm(`Hapus template "${form.value.title}"?`)) return;
 
   try {
     await api.delete(`/operational-templates/${form.value.id}`);
-    backToList();
+    closeTab(activeTabId.value);
     fetchTemplates();
   } catch (err) {
     alert(err.response?.data?.message || 'Gagal menghapus template.');
@@ -1017,8 +1273,9 @@ async function deleteTemplate(template) {
 
   try {
     await api.delete(`/operational-templates/${template.id}`);
-    if (activeView.value === 'document' && form.value.id === template.id) {
-      backToList();
+    const tabIdx = openTabs.value.findIndex(t => t.templateId === template.id);
+    if (tabIdx !== -1) {
+      closeTab(openTabs.value[tabIdx].id);
     }
     fetchTemplates();
   } catch (err) {
@@ -1039,6 +1296,125 @@ function formatDate(val) {
 
 <template>
   <div class="templates-container">
+    
+    <!-- ══════════════════════════════════════════════════════════════════════════
+         BILAH TAB GAYA BROWSER (DYNAMIC MULTI-TAB NAVIGATION)
+         Mengadopsi pola tab browser: Katalog pinned di kiri, tab dokumen dinamis,
+         indikator unsaved, badge tipe dokumen, tombol close ×, dan tombol '+' draft
+         ══════════════════════════════════════════════════════════════════════════ -->
+    <nav class="browser-tabs-shell" aria-label="Tab Dokumen Operasional">
+      <div class="tabs-scroll-wrapper" ref="tabsScrollEl" @wheel="handleTabsWheel">
+        
+        <!-- Pinned Tab Utama: Katalog Template -->
+        <button
+          type="button"
+          class="browser-tab tab-catalog"
+          :class="{ active: activeTabId === 'catalog' }"
+          @click="switchTab('catalog')"
+          title="Buka Katalog Seluruh Template"
+        >
+          <div class="tab-icon-wrap icon-catalog">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="3" y="3" width="7" height="7" rx="1.5"></rect>
+              <rect x="14" y="3" width="7" height="7" rx="1.5"></rect>
+              <rect x="14" y="14" width="7" height="7" rx="1.5"></rect>
+              <rect x="3" y="14" width="7" height="7" rx="1.5"></rect>
+            </svg>
+          </div>
+          <span class="tab-label">Katalog Template</span>
+          <span v-if="templates.length" class="tab-count-pill">{{ templates.length }}</span>
+        </button>
+
+        <!-- Dynamic Document Tabs (Word, PDF, Teks, Draft) -->
+        <div
+          v-for="tab in openTabs"
+          :key="tab.id"
+          class="browser-tab tab-document"
+          :class="[
+            { active: activeTabId === tab.id },
+            'tab-' + tab.type
+          ]"
+          @click="switchTab(tab.id)"
+          :title="tab.form.title || tab.title"
+        >
+          <!-- Document Type Icon -->
+          <div class="tab-icon-wrap" :class="'icon-' + tab.type">
+            <!-- DOCX Icon -->
+            <svg v-if="tab.type === 'docx'" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+              <polyline points="14 2 14 8 20 8"></polyline>
+              <line x1="16" y1="13" x2="8" y2="13"></line>
+              <line x1="16" y1="17" x2="8" y2="17"></line>
+            </svg>
+            <!-- PDF Icon -->
+            <svg v-else-if="tab.type === 'pdf'" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+              <polyline points="14 2 14 8 20 8"></polyline>
+              <line x1="12" y1="18" x2="12" y2="12"></line>
+              <line x1="9" y1="15" x2="15" y2="15"></line>
+            </svg>
+            <!-- TXT Icon -->
+            <svg v-else-if="tab.type === 'txt'" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+              <polyline points="14 2 14 8 20 8"></polyline>
+              <line x1="16" y1="13" x2="8" y2="13"></line>
+              <line x1="16" y1="17" x2="8" y2="17"></line>
+            </svg>
+            <!-- Draft / Blank Icon -->
+            <svg v-else width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+              <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
+              <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
+            </svg>
+          </div>
+
+          <!-- Tab Title -->
+          <span class="tab-label">
+            {{ (activeTabId === tab.id ? form.title : (tab.form.title || tab.title)) || 'Draft Baru' }}
+          </span>
+
+          <!-- Type Chip (Kecil di sebelah judul tab) -->
+          <span class="tab-type-tag" :class="'type-' + tab.type">
+            {{ tab.type.toUpperCase() }}
+          </span>
+
+          <!-- Unsaved dot indicator -->
+          <span
+            v-if="tab.isDirty || (activeTabId === tab.id && autoSaveStatus === 'unsaved')"
+            class="tab-dirty-indicator"
+            title="Perubahan belum tersimpan"
+          ></span>
+
+          <!-- Close button × -->
+          <button
+            type="button"
+            class="btn-tab-close"
+            @click.stop="closeTab(tab.id, $event)"
+            title="Tutup tab"
+            aria-label="Tutup tab"
+          >
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round">
+              <line x1="18" y1="6" x2="6" y2="18"></line>
+              <line x1="6" y1="6" x2="18" y2="18"></line>
+            </svg>
+          </button>
+        </div>
+
+        <!-- Add New Tab '+' Button -->
+        <button
+          type="button"
+          class="btn-tab-new"
+          @click="openCreate"
+          title="Buka lembar template baru (+)"
+          aria-label="Buka lembar template baru"
+        >
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="12" y1="5" x2="12" y2="19"></line>
+            <line x1="5" y1="12" x2="19" y2="12"></line>
+          </svg>
+        </button>
+
+      </div>
+    </nav>
     
     <!-- ══════════════════════════════════════════════════════════════════════════
          TAMPILAN 1: DAFTAR TEMPLATE (GRID DAFTAR TEMPLATE)
@@ -1257,14 +1633,15 @@ function formatDate(val) {
               <button
                 type="button"
                 class="btn-card-kebab"
+                :class="{ active: activeMenuId === template.id }"
                 @click="toggleCardMenu($event, template.id)"
                 title="Opsi dokumen lainnya"
                 aria-label="Opsi dokumen lainnya"
               >
-                <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor">
-                  <circle cx="12" cy="5" r="2"></circle>
-                  <circle cx="12" cy="12" r="2"></circle>
-                  <circle cx="12" cy="19" r="2"></circle>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                  <circle cx="12" cy="5" r="2.2"></circle>
+                  <circle cx="12" cy="12" r="2.2"></circle>
+                  <circle cx="12" cy="19" r="2.2"></circle>
                 </svg>
               </button>
 
@@ -1354,12 +1731,21 @@ function formatDate(val) {
       
       <!-- Top Navigation & Actions Bar -->
       <div class="inline-nav-bar">
-        <button type="button" class="btn-back-link" @click="backToList">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
-            <polyline points="15 18 9 12 15 6"></polyline>
-          </svg>
-          <span>Kembali</span>
-        </button>
+        <div class="inline-nav-left-group">
+          <button type="button" class="btn-back-link" @click="backToList" title="Buka katalog template tanpa menutup tab ini">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="15 18 9 12 15 6"></polyline>
+            </svg>
+            <span>Katalog</span>
+          </button>
+          <button type="button" class="btn-close-tab-inline" @click="closeTab(activeTabId)" title="Tutup tab dokumen ini">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+              <line x1="18" y1="6" x2="6" y2="18"></line>
+              <line x1="6" y1="6" x2="18" y2="18"></line>
+            </svg>
+            <span>Tutup Tab</span>
+          </button>
+        </div>
 
         <div class="inline-actions-group">
           <!-- Salin Teks -->
@@ -1445,27 +1831,52 @@ function formatDate(val) {
           </span>
 
           <!-- Simpan Dokumen (Hanya untuk template non-PDF) -->
-          <button
-            v-else
-            type="button"
-            class="btn-primary btn-save"
-            :class="{ 'btn-save-success': saveSuccess }"
-            @click="handleSave"
-            :disabled="saving"
-            title="Simpan perubahan template ini"
-          >
-            <svg v-if="saveSuccess" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-              <polyline points="20 6 9 17 4 12"></polyline>
-            </svg>
-            <svg v-else-if="!saving" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path>
-              <polyline points="17 21 17 13 7 13 7 21"></polyline>
-              <polyline points="7 3 7 8 15 8"></polyline>
-            </svg>
-            <span v-if="saving">Menyimpan...</span>
-            <span v-else-if="saveSuccess">Tersimpan!</span>
-            <span v-else>Simpan</span>
-          </button>
+          <div v-else class="save-actions-wrap">
+            <!-- Indikator Auto-Save Status -->
+            <div v-if="autoSaveStatus" class="autosave-tag" :class="'as-' + autoSaveStatus">
+              <span v-if="autoSaveStatus === 'saving'" class="as-saving-text">
+                <span class="loading-spinner-xs"></span>
+                <span>Menyimpan otomatis...</span>
+              </span>
+              <span v-else-if="autoSaveStatus === 'saved'" class="as-saved-text" :title="'Tersimpan otomatis pukul ' + (lastSavedTime || '')">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                  <polyline points="20 6 9 17 4 12"></polyline>
+                </svg>
+                <span>Tersimpan otomatis ({{ lastSavedTime }})</span>
+              </span>
+              <span v-else-if="autoSaveStatus === 'unsaved'" class="as-unsaved-text" title="Tekan Ctrl+S atau tunggu sebentar untuk auto-save">
+                <span class="unsaved-pulse-dot"></span>
+                <span>Menunggu simpan...</span>
+              </span>
+              <span v-else-if="autoSaveStatus === 'error'" class="as-error-text">
+                <span>Gagal auto-save &bull; Klik Simpan</span>
+              </span>
+            </div>
+
+            <button
+              type="button"
+              class="btn-primary btn-save"
+              :class="{ 'btn-save-success': saveSuccess }"
+              @click="handleSave(false)"
+              :disabled="saving"
+              title="Simpan dokumen ini (atau tekan Ctrl+S)"
+            >
+              <svg v-if="saveSuccess" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="20 6 9 17 4 12"></polyline>
+              </svg>
+              <svg v-else-if="!saving" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path>
+                <polyline points="17 21 17 13 7 13 7 21"></polyline>
+                <polyline points="7 3 7 8 15 8"></polyline>
+              </svg>
+              <span v-if="saving">Menyimpan...</span>
+              <span v-else-if="saveSuccess">Tersimpan!</span>
+              <span v-else class="btn-save-text-wrap">
+                <span>Simpan</span>
+                <kbd class="kbd-shortcut">Ctrl+S</kbd>
+              </span>
+            </button>
+          </div>
         </div>
       </div>
 
@@ -1489,6 +1900,7 @@ function formatDate(val) {
           v-else
           type="text"
           v-model="form.title"
+          @input="triggerAutoSave"
           class="doc-title-input"
           placeholder="Ketik judul template dokumen..."
           maxlength="255"
@@ -1502,7 +1914,7 @@ function formatDate(val) {
             <span v-if="isDocumentPdf" class="badge-category" :class="getCategoryBadgeClass(form.category)">
               {{ form.category }}
             </span>
-            <select v-else v-model="form.category" class="inline-select">
+            <select v-else v-model="form.category" @change="triggerAutoSave" class="inline-select">
               <option v-for="cat in formCategories" :key="cat" :value="cat">{{ cat }}</option>
             </select>
           </div>
@@ -1711,7 +2123,7 @@ function formatDate(val) {
             class="tb-btn tb-btn-nav"
             :class="{ active: showHeadingNav }"
             @click="showHeadingNav = !showHeadingNav"
-            :title="showHeadingNav ? 'Tutup panel navigasi heading' : 'Buka panel navigasi heading di sebelah kanan'"
+            :title="showHeadingNav ? 'Tutup panel navigasi heading' : 'Buka panel navigasi heading di sebelah kiri'"
           >
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
               <line x1="21" y1="6" x2="3" y2="6"></line>
@@ -1789,16 +2201,11 @@ function formatDate(val) {
         </div>
       </div>
 
-      <!-- Jika Non-PDF (Word/TXT): Lembar Dokumen TipTap Langsung Diedit dengan Navigasi Heading di Kanan -->
+      <!-- Jika Non-PDF (Word/TXT): Lembar Dokumen TipTap Langsung Diedit dengan Navigasi Heading di Kiri -->
       <div v-else class="doc-body-wrapper">
         <div class="doc-editor-layout">
           
-          <!-- Lembar Kertas Dokumen TipTap Utama -->
-          <div class="doc-paper-sheet">
-            <EditorContent :editor="editor" />
-          </div>
-
-          <!-- Panel Navigasi Heading ala Microsoft Word di Sebelah Kanan -->
+          <!-- Panel Navigasi Heading ala Microsoft Word di Sebelah KIRI -->
           <aside
             v-if="showHeadingNav"
             class="word-nav-pane"
@@ -2053,6 +2460,11 @@ function formatDate(val) {
             </div>
           </aside>
 
+          <!-- Lembar Kertas Dokumen TipTap Utama di Sebelah KANAN -->
+          <div class="doc-paper-sheet">
+            <EditorContent :editor="editor" />
+          </div>
+
         </div>
       </div>
 
@@ -2070,8 +2482,11 @@ function formatDate(val) {
         </div>
 
         <div class="inline-actions-group">
-          <button type="button" class="btn-cancel" @click="backToList">
-            Kembali ke Daftar
+          <button type="button" class="btn-cancel" @click="backToList" title="Lihat katalog template">
+            Ke Katalog
+          </button>
+          <button type="button" class="btn-cancel btn-cancel-close-tab" @click="closeTab(activeTabId)" title="Tutup tab ini">
+            Tutup Tab
           </button>
 
           <!-- Jika PDF, tombol aksi utama adalah Salin Teks -->
@@ -2098,8 +2513,9 @@ function formatDate(val) {
             type="button"
             class="btn-primary btn-save"
             :class="{ 'btn-save-success': saveSuccess }"
-            @click="handleSave"
+            @click="handleSave(false)"
             :disabled="saving"
+            title="Simpan dokumen (Ctrl+S)"
           >
             <svg v-if="saveSuccess" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
               <polyline points="20 6 9 17 4 12"></polyline>
@@ -2111,7 +2527,10 @@ function formatDate(val) {
             </svg>
             <span v-if="saving">Menyimpan...</span>
             <span v-else-if="saveSuccess">Tersimpan!</span>
-            <span v-else>Simpan Dokumen</span>
+            <span v-else class="btn-save-text-wrap">
+              <span>Simpan Dokumen</span>
+              <kbd class="kbd-shortcut">Ctrl+S</kbd>
+            </span>
           </button>
         </div>
       </div>
@@ -2126,8 +2545,270 @@ function formatDate(val) {
   width: 100%;
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 0;
   grid-column: 1 / -1;
+}
+
+/* ─── Browser-Style Multi-Tab Navigation Shell ─────────────────────────────── */
+.browser-tabs-shell {
+  width: 100%;
+  background: #f1f5f9;
+  border: 1px solid #e2e8f0;
+  border-radius: 14px 14px 0 0;
+  padding: 8px 12px 0 12px;
+  box-shadow: inset 0 -1px 0 #e2e8f0;
+  margin-bottom: -1px;
+  position: sticky;
+  top: 56px;
+  z-index: 25;
+}
+
+.tabs-scroll-wrapper {
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: thin;
+  padding-bottom: 0px;
+}
+
+.tabs-scroll-wrapper::-webkit-scrollbar {
+  height: 4px;
+}
+
+.tabs-scroll-wrapper::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 4px;
+}
+
+.browser-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 40px;
+  padding: 0 14px;
+  border-radius: 10px 10px 0 0;
+  border: 1.5px solid transparent;
+  border-bottom: none;
+  background: #e2e8f0;
+  color: #475569;
+  font-size: 0.84rem;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  user-select: none;
+  transition: all 0.16s ease;
+  position: relative;
+  max-width: 260px;
+  flex-shrink: 0;
+}
+
+.browser-tab:hover:not(.active) {
+  background: #ffffffa0;
+  color: #0f172a;
+  border-color: #cbd5e1;
+}
+
+/* Active tab style matching reference image with cyan/teal accent */
+.browser-tab.active {
+  background: #ffffff;
+  color: #0f172a;
+  font-weight: 700;
+  border-color: #06b6d4;
+  box-shadow: 0 -2px 10px rgba(6, 182, 212, 0.12);
+  z-index: 2;
+  position: relative;
+}
+
+.browser-tab.active::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -2px;
+  height: 3px;
+  background: #ffffff;
+}
+
+.tab-icon-wrap {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.04);
+  flex-shrink: 0;
+}
+
+.icon-catalog {
+  color: #2563eb;
+  background: #eff6ff;
+}
+
+.icon-docx {
+  color: #0284c7;
+  background: #e0f2fe;
+}
+
+.icon-pdf {
+  color: #dc2626;
+  background: #fee2e2;
+}
+
+.icon-txt {
+  color: #0d9488;
+  background: #ccfbf1;
+}
+
+.icon-draft {
+  color: #d97706;
+  background: #fef3c7;
+}
+
+.tab-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 140px;
+  font-size: 0.83rem;
+}
+
+.tab-count-pill {
+  font-size: 0.72rem;
+  font-weight: 700;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: #dbeafe;
+  color: #1e40af;
+}
+
+.tab-type-tag {
+  font-size: 0.65rem;
+  font-weight: 800;
+  padding: 1px 5px;
+  border-radius: 4px;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.type-docx {
+  background: #e0f2fe;
+  color: #0369a1;
+}
+
+.type-pdf {
+  background: #fee2e2;
+  color: #b91c1c;
+}
+
+.type-txt {
+  background: #ccfbf1;
+  color: #0f766e;
+}
+
+.type-draft {
+  background: #fef3c7;
+  color: #b45309;
+}
+
+.tab-dirty-indicator {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #f59e0b;
+  flex-shrink: 0;
+  box-shadow: 0 0 6px rgba(245, 158, 11, 0.6);
+  animation: pulseDirty 1.5s infinite;
+}
+
+@keyframes pulseDirty {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.4; transform: scale(0.85); }
+}
+
+.btn-tab-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: none;
+  background: transparent;
+  color: #94a3b8;
+  cursor: pointer;
+  padding: 0;
+  margin-left: 2px;
+  flex-shrink: 0;
+  transition: all 0.15s ease;
+}
+
+.btn-tab-close:hover {
+  background: #fee2e2;
+  color: #dc2626;
+}
+
+.btn-tab-new {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 8px;
+  border: 1.5px dashed #cbd5e1;
+  background: transparent;
+  color: #64748b;
+  cursor: pointer;
+  margin-bottom: 3px;
+  margin-left: 4px;
+  flex-shrink: 0;
+  transition: all 0.15s ease;
+}
+
+.btn-tab-new:hover {
+  background: #ffffff;
+  color: #06b6d4;
+  border-color: #06b6d4;
+  box-shadow: 0 2px 6px rgba(6, 182, 212, 0.15);
+}
+
+.inline-nav-left-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.btn-close-tab-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 12px;
+  border-radius: 8px;
+  border: 1px solid #cbd5e1;
+  background: #ffffff;
+  color: #64748b;
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.btn-close-tab-inline:hover {
+  background: #fee2e2;
+  border-color: #fca5a5;
+  color: #dc2626;
+}
+
+.btn-cancel-close-tab {
+  color: #b91c1c !important;
+  background: #fef2f2 !important;
+  border-color: #fecaca !important;
+}
+
+.btn-cancel-close-tab:hover {
+  background: #fee2e2 !important;
 }
 
 .templates-section-card {
@@ -2135,9 +2816,16 @@ function formatDate(val) {
   flex-direction: column;
   gap: 16px;
   background: #ffffff;
-  border-radius: 16px;
+  border-radius: 0 0 16px 16px;
   border: 1px solid #e2e8f0;
+  border-top: none;
   padding: 20px;
+}
+
+.inline-document-card {
+  border-top-left-radius: 0 !important;
+  border-top-right-radius: 0 !important;
+  border-top: none !important;
 }
 
 /* Header Section */
@@ -2310,6 +2998,7 @@ function formatDate(val) {
   transform: translateY(-50%);
   background: none;
   border: none;
+  padding: 0;
   width: 32px;
   height: 32px;
   border-radius: 8px;
@@ -2640,24 +3329,34 @@ function formatDate(val) {
 .btn-card-kebab {
   width: 32px;
   height: 32px;
+  padding: 0;
+  margin: 0;
   border-radius: 8px;
-  display: flex;
+  display: inline-flex;
   align-items: center;
   justify-content: center;
   background: #f8fafc;
   border: 1px solid #e2e8f0;
-  color: #64748b;
+  color: #475569;
   cursor: pointer;
-  transition: all 0.12s ease;
+  transition: all 0.15s ease;
+  flex-shrink: 0;
 }
 
-.btn-card-kebab:hover {
+.btn-card-kebab:hover,
+.btn-card-kebab.active {
   background: #f1f5f9;
+  border-color: #cbd5e1;
   color: #0f172a;
 }
 
 .btn-card-kebab:active {
   transform: scale(0.92);
+}
+
+.btn-card-kebab svg {
+  display: block;
+  pointer-events: none;
 }
 
 /* Card Popover Dropdown */
@@ -2916,6 +3615,108 @@ function formatDate(val) {
 
 .btn-copy-prominent:active {
   transform: scale(0.96);
+}
+
+.save-actions-wrap {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.autosave-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  padding: 5px 10px;
+  border-radius: 8px;
+  animation: fadeIn 0.15s ease-out;
+}
+
+.as-saving {
+  background: #f1f5f9;
+  color: #475569;
+  border: 1px solid #cbd5e1;
+}
+
+.as-saving-text {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.loading-spinner-xs {
+  width: 12px;
+  height: 12px;
+  border: 2px solid #94a3b8;
+  border-top-color: #2563eb;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+.as-saved {
+  background: #ecfdf5;
+  color: #059669;
+  border: 1px solid #a7f3d0;
+}
+
+.as-saved-text {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.as-unsaved {
+  background: #fffbeb;
+  color: #b45309;
+  border: 1px solid #fde68a;
+}
+
+.as-unsaved-text {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.unsaved-pulse-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #f59e0b;
+  box-shadow: 0 0 0 2px rgba(245, 158, 11, 0.3);
+  animation: pulseDot 1.4s infinite ease-in-out;
+}
+
+@keyframes pulseDot {
+  0% { transform: scale(0.9); opacity: 0.8; }
+  50% { transform: scale(1.25); opacity: 1; }
+  100% { transform: scale(0.9); opacity: 0.8; }
+}
+
+.as-error {
+  background: #fef2f2;
+  color: #dc2626;
+  border: 1px solid #fecaca;
+}
+
+.btn-save-text-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.kbd-shortcut {
+  display: inline-block;
+  background: rgba(255, 255, 255, 0.22);
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-size: 0.72rem;
+  font-family: inherit;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
 }
 
 .btn-save {
@@ -4236,7 +5037,8 @@ function formatDate(val) {
   .word-nav-pane {
     position: fixed;
     top: 60px;
-    right: 10px;
+    left: 10px;
+    right: auto;
     bottom: 80px;
     width: min(320px, calc(100vw - 20px));
     max-height: none;
