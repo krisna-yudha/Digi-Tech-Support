@@ -3,10 +3,12 @@ import { computed, watch, onMounted } from 'vue';
 import { useRoute } from 'vue-router';
 import { useAuthStore } from './stores/auth';
 import { useBmkgTime } from './composables/useBmkgTime';
+import { useAgentBreakTimer } from './composables/useAgentBreakTimer';
 
 const route = useRoute();
 const auth  = useAuthStore();
 const bmkgTime = useBmkgTime();
+const breakTimer = useAgentBreakTimer();
 
 const showNav = computed(() => route.name !== 'login');
 
@@ -15,20 +17,39 @@ onMounted(() => {
   bmkgTime.startBmkgClock();
 });
 
-// Update title tab browser: ketika login role Agent, tampilkan jam realtime dari API BMKG (seperti referensi Time.is)
+// Update title tab browser: ketika role Agent, tampilkan jam realtime BMKG atau sisa waktu break
 watch(
   [
     () => auth.hasRole('Agent'),
     () => bmkgTime.timeString.value,
     () => bmkgTime.shortTimeString.value,
-    () => bmkgTime.showSecondsInTitle.value
+    () => bmkgTime.showSecondsInTitle.value,
+    () => bmkgTime.titleMode.value,
+    () => breakTimer.isRunning.value,
+    () => breakTimer.titleSnippet.value
   ],
   () => {
     if (auth.hasRole('Agent')) {
       const timeDisplay = bmkgTime.showSecondsInTitle.value
         ? bmkgTime.timeString.value
         : bmkgTime.shortTimeString.value;
-      document.title = `TS Monitoring ${timeDisplay}`;
+
+      if (breakTimer.isRunning.value && breakTimer.titleSnippet.value) {
+        // Mode Break: Tampilkan sisa waktu break dan jam operasional
+        if (bmkgTime.titleMode.value === 'time_with_app') {
+          document.title = `${breakTimer.titleSnippet.value} • ${timeDisplay} - TS Monitoring`;
+        } else {
+          document.title = `${breakTimer.titleSnippet.value} • ${timeDisplay}`;
+        }
+      } else {
+        // Mode Normal: Waktu saja (default) atau dengan nama app
+        if (bmkgTime.titleMode.value === 'time_with_app') {
+          document.title = `${timeDisplay} - TS Monitoring`;
+        } else {
+          // Menampilkan waktu saja agar tab browser bersih dan terlihat jelas pada tab strip & tab hover preview
+          document.title = timeDisplay;
+        }
+      }
     } else {
       document.title = 'TS Monitoring';
     }
@@ -53,6 +74,7 @@ const navItems = computed(() => {
     { to: '/agent-dashboard',  label: 'Dashboard',       mobileLabel: 'Dashboard', icon: 'dashboard' },
     { to: '/gangguan/create',  label: 'Tambah Gangguan', mobileLabel: 'Tambah',    icon: 'create', isPrimary: true },
     { to: '/agent/templates',  label: 'Template',        mobileLabel: 'Template',  icon: 'template' },
+    { to: '/agent/shortcuts',  label: 'Link Eskalasi',   mobileLabel: 'Link Cepat', icon: 'link' },
   ];
   return [];
 });
@@ -168,6 +190,12 @@ const roleLabel = computed(() => auth.primaryRole);
           <polyline points="10 9 9 9 8 9"></polyline>
         </svg>
 
+        <!-- Link Eskalasi Icon -->
+        <svg v-else-if="item.icon === 'link'" class="nav-svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path>
+          <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path>
+        </svg>
+
         <span class="mobile-nav-label">{{ item.mobileLabel || item.label }}</span>
       </RouterLink>
     </nav>
@@ -260,7 +288,15 @@ const roleLabel = computed(() => auth.primaryRole);
   display: none;
 }
 
+.mobile-only-shortcut {
+  display: none;
+}
+
 @media (max-width: 768px) {
+  .mobile-only-shortcut {
+    display: inline-flex !important;
+  }
+
   .desktop-nav {
     display: none !important;
   }

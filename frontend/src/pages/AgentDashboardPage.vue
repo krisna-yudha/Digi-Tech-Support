@@ -4,13 +4,27 @@ import { useRoute, useRouter } from 'vue-router';
 import api from '../services/api';
 import { useAuthStore } from '../stores/auth';
 import { useBmkgTime } from '../composables/useBmkgTime';
+import { useAgentBreakTimer } from '../composables/useAgentBreakTimer';
 
 const route = useRoute();
 const router = useRouter();
 const auth = useAuthStore();
 const bmkgTime = useBmkgTime();
+const breakTimer = useAgentBreakTimer();
+
 const dashboard = ref(null);
 const loading = ref(false);
+
+// State untuk input break durasi kustom
+const customMinutesInput = ref(20);
+const showCustomInput = ref(false);
+
+function handleStartCustomBreak() {
+  const mins = parseInt(customMinutesInput.value, 10);
+  if (isNaN(mins) || mins <= 0) return;
+  breakTimer.startBreak(mins, `Break Kustom (${mins}m)`, 'custom');
+  showCustomInput.value = false;
+}
 
 const lastSyncFormatted = computed(() => {
   if (!bmkgTime.lastSyncTime.value) return 'Baru saja';
@@ -62,9 +76,9 @@ onMounted(async () => {
     <!-- Header Title & Agent Greeting -->
     <div class="agent-header-row" style="grid-column: 1 / -1;">
       <div class="agent-greeting-wrap">
-        <div class="agent-badge-pill">
-          <span class="pulse-indicator"></span>
-          <span>Agent On Duty</span>
+        <div class="agent-badge-pill" :class="{ 'pill-on-break': breakTimer.isRunning.value }">
+          <span class="pulse-indicator" :class="{ 'pulse-amber': breakTimer.isRunning.value }"></span>
+          <span>{{ breakTimer.isRunning.value ? `Sedang Break (${breakTimer.formattedRemaining.value})` : 'Agent On Duty' }}</span>
         </div>
         <h2 class="agent-title">Halo, {{ auth.user?.name || 'Agent' }}</h2>
         <p class="agent-subtitle">Pantau status terkini dan riwayat pelaporan gangguan pelanggan.</p>
@@ -194,7 +208,7 @@ onMounted(async () => {
             </div>
           </div>
 
-          <!-- Bottom Control Bar (Sinkronkan Ulang & Toggle Tab Title) -->
+          <!-- Bottom Control Bar (Sinkronkan Ulang, Title Mode, & Toggle Detik) -->
           <div class="bmkg-controls-bar">
             <button
               type="button"
@@ -221,6 +235,31 @@ onMounted(async () => {
               <span>{{ bmkgTime.isSyncing.value ? 'Sinkronisasi...' : 'Sinkronkan Ulang' }}</span>
             </button>
 
+            <!-- Mode Format Judul Tab: Waktu Saja vs + Nama App -->
+            <div class="bmkg-title-mode-group">
+              <span class="mode-group-label">Judul Tab:</span>
+              <div class="mode-segmented-pill">
+                <button
+                  type="button"
+                  class="btn-mode-segment"
+                  :class="{ active: bmkgTime.titleMode.value === 'time_only' }"
+                  @click="bmkgTime.setTitleMode('time_only')"
+                  title="Menampilkan waktu saja (contoh: 20:33:46) agar tab browser bersih dan terlihat jelas"
+                >
+                  Waktu Saja
+                </button>
+                <button
+                  type="button"
+                  class="btn-mode-segment"
+                  :class="{ active: bmkgTime.titleMode.value === 'time_with_app' }"
+                  @click="bmkgTime.setTitleMode('time_with_app')"
+                  title="Menampilkan waktu beserta nama aplikasi (contoh: 20:33:46 - TS Monitoring)"
+                >
+                  + Nama App
+                </button>
+              </div>
+            </div>
+
             <!-- Toggle Detik pada Tab Title Browser -->
             <label class="bmkg-tab-toggle" title="Pilih apakah detik ditampilkan pada judul tab browser (Time.is)">
               <input
@@ -228,8 +267,260 @@ onMounted(async () => {
                 :checked="bmkgTime.showSecondsInTitle.value"
                 @change="bmkgTime.toggleShowSecondsInTitle()"
               />
-              <span class="toggle-label-text">Tampilkan detik di tab browser</span>
+              <span class="toggle-label-text">Tampilkan detik di tab</span>
             </label>
+          </div>
+        </div>
+      </div>
+
+      <!-- ── Section Stopwatch & Timer Break Agent (Terintegrasi) ── -->
+      <div class="agent-break-section">
+        <div class="break-section-header">
+          <div class="break-header-left">
+            <div class="break-icon-bubble" :class="{ 'pulse-active': breakTimer.isRunning.value }">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="12" cy="12" r="10"></circle>
+                <polyline points="12 6 12 12 16 14"></polyline>
+              </svg>
+            </div>
+            <div>
+              <div class="break-title-row">
+                <h4 class="break-section-title">Stopwatch & Timer Break Agent</h4>
+                <span
+                  class="break-status-badge"
+                  :class="'badge-status-' + breakTimer.urgencyStatus.value"
+                >
+                  <span v-if="breakTimer.isRunning.value" class="pulse-dot-inner"></span>
+                  {{ breakTimer.isRunning.value ? (breakTimer.isPaused.value ? 'Dijeda' : (breakTimer.mode.value === 'stopwatch' ? 'Stopwatch Aktif' : 'Sedang Break')) : 'Siap / On Duty' }}
+                </span>
+              </div>
+              <p class="break-section-desc">
+                Atur durasi istirahat agent. Waktu sisa otomatis tampil realtime pada tab browser.
+              </p>
+            </div>
+          </div>
+
+          <div class="break-header-right">
+            <!-- Toggle Suara Alarm -->
+            <button
+              type="button"
+              class="btn-break-sound-toggle"
+              :class="{ 'sound-active': breakTimer.soundEnabled.value }"
+              @click="breakTimer.toggleSound()"
+              :title="breakTimer.soundEnabled.value ? 'Suara alarm aktif saat waktu break habis' : 'Suara alarm dimatikan'"
+            >
+              <svg v-if="breakTimer.soundEnabled.value" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path>
+                <path d="M13.73 21a2 2 0 0 1-3.46 0"></path>
+              </svg>
+              <svg v-else width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M13.73 21a2 2 0 0 1-3.46 0"></path>
+                <path d="M18.63 13A17.89 17.89 0 0 1 18 8"></path>
+                <path d="M6.26 6.26A5.86 5.86 0 0 0 6 8c0 7-3 9-3 9h14"></path>
+                <path d="M18 8a6 6 0 0 0-9.33-5"></path>
+                <line x1="1" y1="1" x2="23" y2="23"></line>
+              </svg>
+              <span>{{ breakTimer.soundEnabled.value ? 'Alarm Aktif' : 'Alarm Hening' }}</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- JIKA SEDANG AKTIF BREAK -->
+        <div v-if="breakTimer.isRunning.value" class="break-active-panel" :class="'panel-urgency-' + breakTimer.urgencyStatus.value">
+          <div class="active-break-row">
+            <div class="active-break-time-block">
+              <span class="active-break-label">
+                {{ breakTimer.mode.value === 'stopwatch' ? 'DURASI STOPWATCH BERJALAN' : (breakTimer.isOvertime.value ? '⚠️ WAKTU ISTIRAHAT HABIS (OVERTIME)' : 'SISA WAKTU ISTIRAHAT') }}
+              </span>
+              <div class="active-break-digits-wrap">
+                <span class="active-break-digits" :class="{ 'digits-overtime': breakTimer.isOvertime.value }">
+                  {{ breakTimer.isOvertime.value ? breakTimer.overtimeFormatted.value : breakTimer.formattedRemaining.value }}
+                </span>
+                <span class="active-break-type-pill">{{ breakTimer.breakLabel.value }}</span>
+              </div>
+            </div>
+
+            <!-- Tombol Kontrol Saat Aktif -->
+            <div class="active-break-actions">
+              <button
+                v-if="!breakTimer.isPaused.value"
+                type="button"
+                class="btn-break-ctrl btn-break-pause"
+                @click="breakTimer.pauseBreak()"
+                title="Jeda timer break sementara"
+              >
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round">
+                  <rect x="6" y="4" width="4" height="16"></rect>
+                  <rect x="14" y="4" width="4" height="16"></rect>
+                </svg>
+                <span>Jeda</span>
+              </button>
+              <button
+                v-else
+                type="button"
+                class="btn-break-ctrl btn-break-resume"
+                @click="breakTimer.resumeBreak()"
+                title="Lanjutkan timer break"
+              >
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round">
+                  <polygon points="5 3 19 12 5 21 5 3"></polygon>
+                </svg>
+                <span>Lanjutkan</span>
+              </button>
+
+              <button
+                type="button"
+                class="btn-break-ctrl btn-break-finish"
+                @click="breakTimer.finishBreak()"
+                title="Selesaikan break dan kembali On Duty"
+              >
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round">
+                  <polyline points="20 6 9 17 4 12"></polyline>
+                </svg>
+                <span>Selesai Break (On Duty)</span>
+              </button>
+
+              <button
+                type="button"
+                class="btn-break-ctrl btn-break-cancel"
+                @click="breakTimer.cancelBreak()"
+                title="Batalkan sesi break ini"
+              >
+                &times; Batal
+              </button>
+            </div>
+          </div>
+
+          <!-- Progress Bar (Countdown Mode) -->
+          <div v-if="breakTimer.mode.value === 'countdown'" class="break-progress-wrap">
+            <div class="break-progress-bar">
+              <div
+                class="break-progress-fill"
+                :style="{ width: breakTimer.progressPercent.value + '%' }"
+                :class="'fill-' + breakTimer.urgencyStatus.value"
+              ></div>
+            </div>
+            <div class="break-progress-legend">
+              <span>Waktu Berjalan: {{ breakTimer.formattedElapsed.value }}</span>
+              <span class="legend-percent">{{ breakTimer.progressPercent.value }}%</span>
+              <span>Target: {{ breakTimer.targetMinutes.value }} menit</span>
+            </div>
+          </div>
+
+          <!-- Tab Title Helper Note -->
+          <div class="break-tab-hint">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="12" r="10"></circle>
+              <line x1="12" y1="16" x2="12" y2="12"></line>
+              <line x1="12" y1="8" x2="12.01" y2="8"></line>
+            </svg>
+            <span>Sisa break tampil otomatis di judul tab browser (<strong>{{ breakTimer.titleSnippet.value }}</strong>). Anda dapat memantau waktu istirahat sambil membuka tab lain (Facebook, YouTube, dll).</span>
+          </div>
+        </div>
+
+        <!-- JIKA IDLE (TAMPILKAN PILIHAN PRESET & STOPWATCH) -->
+        <div v-else class="break-presets-panel">
+          <div class="break-presets-row">
+            <span class="preset-group-label">Pilih Durasi:</span>
+
+            <button
+              type="button"
+              class="btn-preset-pill"
+              @click="breakTimer.startBreak(15, 'Coffee / Toilet Break (15m)', '15m')"
+            >
+              <span class="preset-pill-icon">☕</span>
+              <span class="preset-pill-title">15 Menit</span>
+              <span class="preset-pill-sub">Short Break</span>
+            </button>
+
+            <button
+              type="button"
+              class="btn-preset-pill btn-preset-highlight"
+              @click="breakTimer.startBreak(30, 'Istirahat Makan / Ishoma (30m)', '30m')"
+            >
+              <span class="preset-pill-icon">🍱</span>
+              <span class="preset-pill-title">30 Menit</span>
+              <span class="preset-pill-sub">Ishoma / Makan</span>
+            </button>
+
+            <button
+              type="button"
+              class="btn-preset-pill"
+              @click="breakTimer.startBreak(45, 'Istirahat Panjang (45m)', '45m')"
+            >
+              <span class="preset-pill-icon">🍽️</span>
+              <span class="preset-pill-title">45 Menit</span>
+              <span class="preset-pill-sub">Salat & Makan</span>
+            </button>
+
+            <button
+              type="button"
+              class="btn-preset-pill"
+              @click="breakTimer.startBreak(60, 'Full Break 1 Jam (60m)', '60m')"
+            >
+              <span class="preset-pill-icon">⏳</span>
+              <span class="preset-pill-title">60 Menit</span>
+              <span class="preset-pill-sub">Full Break</span>
+            </button>
+
+            <button
+              type="button"
+              class="btn-preset-pill btn-preset-stopwatch"
+              @click="breakTimer.startStopwatch('Stopwatch Break Bebas')"
+              title="Hitung maju dari 00:00 tanpa batas waktu"
+            >
+              <span class="preset-pill-icon">⏱️</span>
+              <span class="preset-pill-title">Stopwatch</span>
+              <span class="preset-pill-sub">Hitung Maju</span>
+            </button>
+
+            <button
+              type="button"
+              class="btn-preset-pill btn-preset-custom-toggle"
+              :class="{ active: showCustomInput }"
+              @click="showCustomInput = !showCustomInput"
+            >
+              <span class="preset-pill-icon">⚙️</span>
+              <span class="preset-pill-title">Kustom</span>
+              <span class="preset-pill-sub">Ketik Menit</span>
+            </button>
+          </div>
+
+          <!-- Form Input Kustom Menit jika dibuka -->
+          <div v-if="showCustomInput" class="custom-break-row">
+            <label class="custom-break-label">Tentukan Menit Istirahat:</label>
+            <input
+              type="number"
+              v-model.number="customMinutesInput"
+              min="1"
+              max="240"
+              class="custom-minutes-input"
+              placeholder="1-240"
+            />
+            <span class="custom-input-unit">Menit</span>
+            <button
+              type="button"
+              class="btn-start-custom"
+              @click="handleStartCustomBreak"
+            >
+              Mulai Break {{ customMinutesInput }} Menit
+            </button>
+            <button
+              type="button"
+              class="btn-cancel-custom"
+              @click="showCustomInput = false"
+            >
+              Batal
+            </button>
+          </div>
+
+          <!-- Catatan Riwayat Break Terakhir (Jika ada) -->
+          <div v-if="breakTimer.lastBreakRecord.value" class="last-break-history-row">
+            <span class="last-break-icon">📋</span>
+            <span class="last-break-text">
+              Break Terakhir: <strong>{{ breakTimer.lastBreakRecord.value.label }}</strong> &bull; Pukul {{ breakTimer.lastBreakRecord.value.startTime }} - {{ breakTimer.lastBreakRecord.value.endTime }} (Durasi: {{ breakTimer.lastBreakRecord.value.actualDurationFormatted }})
+              <span v-if="breakTimer.lastBreakRecord.value.wasOvertime" class="tag-overtime-record">Overtime</span>
+            </span>
           </div>
         </div>
       </div>
@@ -738,9 +1029,10 @@ onMounted(async () => {
 
 .bmkg-card-inner {
   display: grid;
-  grid-template-columns: 1fr 1.15fr;
+  grid-template-columns: 1.22fr 1fr;
   gap: 24px;
   padding: 22px 24px;
+  align-items: center;
 }
 
 /* Kolom Kiri: Clock & Date */
@@ -809,24 +1101,30 @@ onMounted(async () => {
 .bmkg-time-display {
   display: flex;
   align-items: baseline;
-  gap: 8px;
-  margin: 4px 0 2px;
+  gap: 10px;
+  margin: 6px 0 6px;
 }
 
 .bmkg-digits {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
-  font-size: 2.75rem;
-  font-weight: 800;
-  letter-spacing: -0.03em;
+  font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  font-variant-numeric: tabular-nums;
+  font-size: 4.15rem;
+  font-weight: 900;
+  letter-spacing: -0.04em;
   color: #0f172a;
   line-height: 1;
 }
 
 .bmkg-tz-badge {
-  font-size: 0.95rem;
+  font-size: 1.1rem;
   font-weight: 800;
   color: #2563eb;
-  letter-spacing: 0.02em;
+  letter-spacing: 0.03em;
+  background: #eff6ff;
+  border: 1px solid #dbeafe;
+  padding: 3px 8px;
+  border-radius: 6px;
+  align-self: center;
 }
 
 .bmkg-date-meta {
@@ -834,7 +1132,7 @@ onMounted(async () => {
   align-items: center;
   gap: 10px;
   color: #475569;
-  font-size: 0.85rem;
+  font-size: 0.92rem;
   flex-wrap: wrap;
 }
 
@@ -1032,14 +1330,25 @@ onMounted(async () => {
   font-weight: 600;
 }
 
+@media (max-width: 1024px) {
+  .bmkg-card-inner {
+    grid-template-columns: 1.15fr 1fr;
+    gap: 20px;
+    padding: 20px;
+  }
+  .bmkg-digits {
+    font-size: 3.4rem;
+  }
+}
+
 @media (max-width: 860px) {
   .bmkg-card-inner {
     grid-template-columns: 1fr;
     gap: 16px;
-    padding: 16px;
+    padding: 18px;
   }
   .bmkg-digits {
-    font-size: 2.2rem;
+    font-size: 3rem;
   }
 }
 
@@ -1052,7 +1361,7 @@ onMounted(async () => {
     justify-content: center;
   }
   .bmkg-digits {
-    font-size: 2rem;
+    font-size: 2.35rem;
   }
   .bmkg-controls-bar {
     flex-direction: column;
@@ -1098,6 +1407,639 @@ onMounted(async () => {
     justify-content: space-between;
     border-top: 1px dashed #f1f5f9;
     padding-top: 8px;
+  }
+}
+
+/* ─── Mode Title Tab Segmented Control ───────────────────────── */
+.bmkg-title-mode-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.75rem;
+}
+
+.mode-group-label {
+  color: #64748b;
+  font-weight: 600;
+}
+
+.mode-segmented-pill {
+  display: inline-flex;
+  align-items: center;
+  background: #f1f5f9;
+  border: 1px solid #e2e8f0;
+  border-radius: 999px;
+  padding: 2px;
+  gap: 2px;
+}
+
+.btn-mode-segment {
+  padding: 3px 9px;
+  border-radius: 999px;
+  border: none;
+  background: transparent;
+  color: #64748b;
+  font-size: 0.72rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  line-height: 1.2;
+}
+
+.btn-mode-segment:hover {
+  color: #0f172a;
+}
+
+.btn-mode-segment.active {
+  background: #2563eb;
+  color: #ffffff;
+  box-shadow: 0 1px 3px rgba(37, 99, 235, 0.3);
+}
+
+/* ─── Greeting Pill When On Break ────────────────────────────── */
+.pill-on-break {
+  background: #fff7ed !important;
+  border-color: #ffedd5 !important;
+  color: #c2410c !important;
+}
+
+.pulse-amber {
+  background: #ea580c !important;
+  box-shadow: 0 0 0 0 rgba(234, 88, 12, 0.7) !important;
+  animation: amberPulse 1.6s infinite !important;
+}
+
+@keyframes amberPulse {
+  0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(234, 88, 12, 0.7); }
+  70% { transform: scale(1); box-shadow: 0 0 0 6px rgba(234, 88, 12, 0); }
+  100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(234, 88, 12, 0); }
+}
+
+/* ─── Break Section (Stopwatch & Countdown) ───────────────────── */
+.agent-break-section {
+  border-top: 1px solid #f1f5f9;
+  background: #fafbfc;
+  padding: 18px 24px 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.break-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.break-header-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.break-icon-bubble {
+  width: 42px;
+  height: 42px;
+  border-radius: 12px;
+  background: #eff6ff;
+  border: 1px solid #dbeafe;
+  color: #2563eb;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition: all 0.2s ease;
+}
+
+.break-icon-bubble.pulse-active {
+  background: #fff7ed;
+  border-color: #fed7aa;
+  color: #ea580c;
+  animation: bubblePulse 2s infinite;
+}
+
+@keyframes bubblePulse {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.05); }
+}
+
+.break-title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.break-section-title {
+  margin: 0;
+  font-size: 0.98rem;
+  font-weight: 800;
+  color: #0f172a;
+}
+
+.break-section-desc {
+  margin: 2px 0 0;
+  font-size: 0.76rem;
+  color: #64748b;
+}
+
+.break-status-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 0.68rem;
+  font-weight: 800;
+  padding: 2px 8px;
+  border-radius: 999px;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.pulse-dot-inner {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  animation: dotBlink 1s infinite;
+}
+
+@keyframes dotBlink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+
+.badge-status-idle {
+  background: #f1f5f9;
+  color: #475569;
+}
+
+.badge-status-normal,
+.badge-status-stopwatch {
+  background: #dbeafe;
+  color: #1d4ed8;
+  border: 1px solid #bfdbfe;
+}
+
+.badge-status-warning {
+  background: #fef3c7;
+  color: #b45309;
+  border: 1px solid #fde68a;
+}
+
+.badge-status-overtime {
+  background: #fee2e2;
+  color: #dc2626;
+  border: 1px solid #fecaca;
+  animation: overtimeBlink 1.5s infinite;
+}
+
+@keyframes overtimeBlink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
+}
+
+.btn-break-sound-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: 8px;
+  background: #ffffff;
+  border: 1px solid #cbd5e1;
+  color: #64748b;
+  font-size: 0.75rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.btn-break-sound-toggle:hover {
+  background: #f8fafc;
+  color: #0f172a;
+}
+
+.btn-break-sound-toggle.sound-active {
+  background: #eff6ff;
+  border-color: #bfdbfe;
+  color: #2563eb;
+}
+
+/* ─── Active Break Panel ─────────────────────────────────────── */
+.break-active-panel {
+  background: #ffffff;
+  border-radius: 14px;
+  border: 1.5px solid #bfdbfe;
+  padding: 16px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  box-shadow: 0 4px 14px rgba(37, 99, 235, 0.06);
+}
+
+.panel-urgency-warning {
+  border-color: #fcd34d;
+  background: #fffdf5;
+  box-shadow: 0 4px 14px rgba(217, 119, 6, 0.08);
+}
+
+.panel-urgency-overtime {
+  border-color: #fca5a5;
+  background: #fffafa;
+  box-shadow: 0 4px 14px rgba(220, 38, 38, 0.1);
+}
+
+.active-break-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.active-break-time-block {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.active-break-label {
+  font-size: 0.7rem;
+  font-weight: 800;
+  color: #64748b;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.active-break-digits-wrap {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.active-break-digits {
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  font-variant-numeric: tabular-nums;
+  font-size: 2.85rem;
+  font-weight: 900;
+  color: #1e3a8a;
+  line-height: 1;
+  letter-spacing: -0.03em;
+}
+
+.digits-overtime {
+  color: #dc2626 !important;
+}
+
+.active-break-type-pill {
+  font-size: 0.78rem;
+  font-weight: 700;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: #eff6ff;
+  color: #1d4ed8;
+  border: 1px solid #dbeafe;
+}
+
+.active-break-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.btn-break-ctrl {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  border-radius: 9px;
+  font-size: 0.8rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  border: none;
+}
+
+.btn-break-pause {
+  background: #fef3c7;
+  color: #b45309;
+  border: 1px solid #fde68a;
+}
+
+.btn-break-pause:hover {
+  background: #fde68a;
+  color: #92400e;
+}
+
+.btn-break-resume {
+  background: #eff6ff;
+  color: #1d4ed8;
+  border: 1px solid #bfdbfe;
+}
+
+.btn-break-resume:hover {
+  background: #dbeafe;
+}
+
+.btn-break-finish {
+  background: #10b981;
+  color: #ffffff;
+  box-shadow: 0 2px 6px rgba(16, 185, 129, 0.25);
+}
+
+.btn-break-finish:hover {
+  background: #059669;
+}
+
+.btn-break-cancel {
+  background: #f1f5f9;
+  color: #64748b;
+  border: 1px solid #e2e8f0;
+}
+
+.btn-break-cancel:hover {
+  background: #fee2e2;
+  color: #dc2626;
+  border-color: #fecaca;
+}
+
+/* Progress bar */
+.break-progress-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.break-progress-bar {
+  width: 100%;
+  height: 8px;
+  border-radius: 999px;
+  background: #e2e8f0;
+  overflow: hidden;
+}
+
+.break-progress-fill {
+  height: 100%;
+  border-radius: 999px;
+  transition: width 0.5s ease;
+}
+
+.fill-normal,
+.fill-stopwatch {
+  background: linear-gradient(90deg, #3b82f6, #2563eb);
+}
+
+.fill-warning {
+  background: linear-gradient(90deg, #f59e0b, #d97706);
+}
+
+.fill-overtime {
+  background: linear-gradient(90deg, #ef4444, #dc2626);
+}
+
+.break-progress-legend {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 0.72rem;
+  color: #64748b;
+  font-weight: 600;
+}
+
+.legend-percent {
+  font-weight: 800;
+  color: #0f172a;
+}
+
+.break-tab-hint {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.74rem;
+  color: #475569;
+  background: #f8fafc;
+  padding: 6px 10px;
+  border-radius: 8px;
+  border: 1px solid #f1f5f9;
+}
+
+.break-tab-hint svg {
+  color: #2563eb;
+  flex-shrink: 0;
+}
+
+/* ─── Idle Presets Panel ─────────────────────────────────────── */
+.break-presets-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.break-presets-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.preset-group-label {
+  font-size: 0.76rem;
+  font-weight: 700;
+  color: #475569;
+  margin-right: 4px;
+}
+
+.btn-preset-pill {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 8px 14px;
+  border-radius: 10px;
+  background: #ffffff;
+  border: 1.5px solid #e2e8f0;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  text-align: left;
+}
+
+.btn-preset-pill:hover {
+  border-color: #93c5fd;
+  background: #f8fafc;
+  transform: translateY(-1px);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
+}
+
+.btn-preset-highlight {
+  border-color: #bfdbfe;
+  background: #eff6ff;
+}
+
+.btn-preset-highlight:hover {
+  border-color: #3b82f6;
+  background: #dbeafe;
+}
+
+.btn-preset-stopwatch {
+  border-color: #d1fae5;
+  background: #ecfdf5;
+}
+
+.btn-preset-stopwatch:hover {
+  border-color: #10b981;
+  background: #d1fae5;
+}
+
+.btn-preset-custom-toggle.active {
+  border-color: #2563eb;
+  background: #eff6ff;
+  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.15);
+}
+
+.preset-pill-icon {
+  font-size: 1rem;
+  line-height: 1;
+}
+
+.preset-pill-title {
+  font-size: 0.82rem;
+  font-weight: 800;
+  color: #0f172a;
+  line-height: 1.2;
+}
+
+.preset-pill-sub {
+  font-size: 0.68rem;
+  color: #64748b;
+  font-weight: 600;
+}
+
+/* Custom Minutes Input Row */
+.custom-break-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border-radius: 10px;
+  background: #ffffff;
+  border: 1px solid #bfdbfe;
+  animation: fadeIn 0.2s ease;
+  flex-wrap: wrap;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.custom-break-label {
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: #334155;
+}
+
+.custom-minutes-input {
+  width: 75px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  border: 1.5px solid #cbd5e1;
+  font-size: 0.88rem;
+  font-weight: 700;
+  color: #0f172a;
+  outline: none;
+  box-sizing: border-box;
+}
+
+.custom-minutes-input:focus {
+  border-color: #2563eb;
+}
+
+.custom-input-unit {
+  font-size: 0.8rem;
+  color: #64748b;
+  font-weight: 600;
+}
+
+.btn-start-custom {
+  padding: 7px 14px;
+  border-radius: 8px;
+  background: #2563eb;
+  color: #ffffff;
+  border: none;
+  font-size: 0.8rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.btn-start-custom:hover {
+  background: #1d4ed8;
+}
+
+.btn-cancel-custom {
+  padding: 7px 12px;
+  border-radius: 8px;
+  background: #f1f5f9;
+  color: #64748b;
+  border: 1px solid #e2e8f0;
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.btn-cancel-custom:hover {
+  background: #e2e8f0;
+  color: #0f172a;
+}
+
+/* Last break history row */
+.last-break-history-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.74rem;
+  color: #64748b;
+  padding-top: 4px;
+}
+
+.last-break-icon {
+  font-size: 0.85rem;
+}
+
+.tag-overtime-record {
+  margin-left: 6px;
+  font-size: 0.65rem;
+  font-weight: 800;
+  background: #fee2e2;
+  color: #dc2626;
+  padding: 1px 6px;
+  border-radius: 4px;
+  text-transform: uppercase;
+}
+
+@media (max-width: 640px) {
+  .agent-break-section {
+    padding: 14px 16px;
+  }
+  .active-break-digits {
+    font-size: 2.2rem;
+  }
+  .active-break-actions {
+    width: 100%;
+    justify-content: stretch;
+  }
+  .active-break-actions .btn-break-ctrl {
+    flex: 1;
+    justify-content: center;
+  }
+  .break-presets-row {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .btn-preset-pill {
+    width: 100%;
   }
 }
 </style>

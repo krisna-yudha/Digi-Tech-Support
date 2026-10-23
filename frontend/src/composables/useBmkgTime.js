@@ -17,6 +17,9 @@ const notice = ref('');
 // Pilihan apakah detik ikut ditampilkan di tab browser title (default: false agar seperti referensi Time.is 19:14)
 const showSecondsInTitle = ref(localStorage.getItem('bmkg_title_seconds') === 'true');
 
+// Mode tampilan judul tab browser: 'time_only' (Waktu Saja) atau 'time_with_app' (Waktu + TS Monitoring)
+const titleMode = ref(localStorage.getItem('bmkg_title_mode') || 'time_only');
+
 let tickTimer = null;
 let autoSyncTimer = null;
 
@@ -205,6 +208,11 @@ function toggleShowSecondsInTitle() {
   localStorage.setItem('bmkg_title_seconds', String(showSecondsInTitle.value));
 }
 
+function setTitleMode(newMode) {
+  titleMode.value = newMode;
+  localStorage.setItem('bmkg_title_mode', newMode);
+}
+
 export function useBmkgTime() {
   return {
     // Realtime values
@@ -241,6 +249,8 @@ export function useBmkgTime() {
     // Fitur Tab Title
     showSecondsInTitle,
     toggleShowSecondsInTitle,
+    titleMode,
+    setTitleMode,
 
     // Action handlers
     syncWithBmkg,
