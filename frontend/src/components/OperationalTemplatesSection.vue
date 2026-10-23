@@ -2,6 +2,7 @@
 import { ref, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue';
 import JSZip from 'jszip';
 import mammoth from 'mammoth';
+import * as XLSX from 'xlsx';
 import { useEditor, EditorContent } from '@tiptap/vue-3';
 import StarterKit from '@tiptap/starter-kit';
 import api from '../services/api';
@@ -176,21 +177,178 @@ async function extractPdfRawText(arrayBuffer) {
   }
 }
 
+// ─── Parser Spreadsheet Excel Menggunakan Library SheetJS (xlsx) ───────────────
+function parseExcelWorkbook(arrayBuffer) {
+  try {
+    const workbook = XLSX.read(arrayBuffer, { type: 'array' });
+    const sheetNames = workbook.SheetNames || [];
+    const sheets = [];
+    let totalRows = 0;
+    const allTextPieces = [];
+
+    sheetNames.forEach(sheetName => {
+      const ws = workbook.Sheets[sheetName];
+      if (!ws) return;
+
+      const rawData = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
+      const filteredRows = rawData.filter(row => Array.isArray(row) && row.some(cell => String(cell).trim() !== ''));
+
+      if (filteredRows.length > 0) {
+        totalRows += filteredRows.length;
+        filteredRows.forEach(r => allTextPieces.push(r.join(' ')));
+      }
+
+      sheets.push({
+        name: sheetName,
+        rows: filteredRows
+      });
+    });
+
+    return {
+      sheetNames,
+      sheets,
+      totalRows,
+      plainText: allTextPieces.join('\n')
+    };
+  } catch (err) {
+    console.error('Gagal mem-parsing workbook Excel:', err);
+    return {
+      sheetNames: ['Sheet1'],
+      sheets: [{ name: 'Sheet1', rows: [] }],
+      totalRows: 0,
+      plainText: ''
+    };
+  }
+}
+
 // ─── Component State ──────────────────────────────────────────────────────────
 // ─── Component State & Multi-Tab System (Ala Tab Browser) ─────────────────────
 // Mode tab aktif: 'catalog' (koleksi template) | 'doc-...' | 'draft-...'
-const openTabs = ref([]); // Tab dokumen yang terbuka: [{ id, title, type, templateId, form, ... }]
+// Tab 'catalog' diintegrasikan ke openTabs sehingga posisinya bisa digeser/ditukar (reorderable)
+const openTabs = ref([
+  {
+    id: 'catalog',
+    title: 'Katalog Template',
+    type: 'catalog',
+    isPermanent: true
+  }
+]);
 const activeTabId = ref('catalog');
 const activeView = computed(() => activeTabId.value === 'catalog' ? 'list' : 'document');
 const tabsScrollEl = ref(null);
 let draftCounter = 1;
+
+// ─── Drag & Drop Reordering State untuk Tab (Bisa Digeser Sesuai Kebutuhan) ───
+const draggedTabIndex = ref(null);
+const dropTargetIndex = ref(null);
+const dropPosition = ref(null); // 'before' | 'after'
+let isDraggingTab = false;
+
+// Kontrol Scroll Geser Horizontal Bilah Tab
+const canScrollLeft = ref(false);
+const canScrollRight = ref(false);
+
+function checkTabScroll() {
+  if (!tabsScrollEl.value) return;
+  const { scrollLeft, scrollWidth, clientWidth } = tabsScrollEl.value;
+  canScrollLeft.value = scrollLeft > 6;
+  canScrollRight.value = scrollLeft + clientWidth < scrollWidth - 6;
+}
+
+function scrollTabs(direction) {
+  if (!tabsScrollEl.value) return;
+  const delta = direction === 'left' ? -220 : 220;
+  tabsScrollEl.value.scrollBy({ left: delta, behavior: 'smooth' });
+  setTimeout(checkTabScroll, 250);
+}
 
 // Gulir horizontal bilah tab menggunakan scroll mouse / touchpad
 function handleTabsWheel(e) {
   if (e.deltaY !== 0 && tabsScrollEl.value) {
     e.preventDefault();
     tabsScrollEl.value.scrollLeft += e.deltaY;
+    checkTabScroll();
   }
+}
+
+// Event Handler Drag & Drop Reordering Tab
+function onTabDragStart(e, index) {
+  draggedTabIndex.value = index;
+  isDraggingTab = true;
+  e.dataTransfer.effectAllowed = 'move';
+  e.dataTransfer.setData('text/plain', String(index));
+}
+
+function onTabDragOver(e, index) {
+  e.preventDefault();
+  e.dataTransfer.dropEffect = 'move';
+
+  if (draggedTabIndex.value === null || draggedTabIndex.value === index) {
+    dropTargetIndex.value = null;
+    dropPosition.value = null;
+    return;
+  }
+
+  const rect = e.currentTarget.getBoundingClientRect();
+  const midpoint = rect.left + rect.width / 2;
+  const pos = e.clientX < midpoint ? 'before' : 'after';
+
+  if (
+    (pos === 'before' && index === draggedTabIndex.value + 1) ||
+    (pos === 'after' && index === draggedTabIndex.value - 1)
+  ) {
+    dropTargetIndex.value = null;
+    dropPosition.value = null;
+    return;
+  }
+
+  dropTargetIndex.value = index;
+  dropPosition.value = pos;
+}
+
+function onTabDragLeave(e, index) {
+  if (dropTargetIndex.value === index && e.relatedTarget && !e.currentTarget.contains(e.relatedTarget)) {
+    dropTargetIndex.value = null;
+    dropPosition.value = null;
+  }
+}
+
+function onTabDrop(e, index) {
+  e.preventDefault();
+  if (draggedTabIndex.value === null || draggedTabIndex.value === index) {
+    cleanupDragState();
+    return;
+  }
+
+  const fromIndex = draggedTabIndex.value;
+  let toIndex = index;
+
+  if (dropPosition.value === 'after') {
+    toIndex = fromIndex < index ? index : index + 1;
+  } else if (dropPosition.value === 'before') {
+    toIndex = fromIndex < index ? index - 1 : index;
+  }
+
+  if (fromIndex !== toIndex && toIndex >= 0 && toIndex < openTabs.value.length) {
+    const [movedTab] = openTabs.value.splice(fromIndex, 1);
+    openTabs.value.splice(toIndex, 0, movedTab);
+  }
+
+  cleanupDragState();
+  nextTick(checkTabScroll);
+}
+
+function onTabDragEnd() {
+  cleanupDragState();
+}
+
+function cleanupDragState() {
+  draggedTabIndex.value = null;
+  dropTargetIndex.value = null;
+  dropPosition.value = null;
+  setTimeout(() => {
+    isDraggingTab = false;
+  }, 100);
 }
 
 const templates = ref([]);
@@ -219,6 +377,114 @@ const form = ref({
 const isDocumentPdf = computed(() => {
   return form.value.original_filename?.toLowerCase().endsWith('.pdf') || false;
 });
+
+// Deteksi apakah dokumen yang sedang aktif adalah file spreadsheet Excel (.xlsx, .xls, .csv)
+const isDocumentExcel = computed(() => {
+  const fn = form.value.original_filename?.toLowerCase() || '';
+  return fn.endsWith('.xlsx') || fn.endsWith('.xls') || fn.endsWith('.csv');
+});
+
+// State khusus Spreadsheet Excel
+const excelData = ref(null); // { sheetNames: [], sheets: [{ name, rows: [] }], totalRows: 0 }
+const activeExcelSheetIndex = ref(0);
+const excelSearchQuery = ref('');
+const isExcelCopied = ref(false);
+const copiedRowIndex = ref(null);
+const excelLoading = ref(false);
+
+// Sheet aktif yang sedang dipilih pada dokumen Excel
+const currentActiveSheet = computed(() => {
+  if (!excelData.value?.sheets?.length) return null;
+  const idx = Math.min(activeExcelSheetIndex.value, excelData.value.sheets.length - 1);
+  return excelData.value.sheets[idx] || null;
+});
+
+// Daftar kolom header tabel Excel
+const excelHeaderColumns = computed(() => {
+  if (!currentActiveSheet.value?.rows?.length) return [];
+  const firstRow = currentActiveSheet.value.rows[0];
+  if (!Array.isArray(firstRow)) return [];
+
+  let maxCols = firstRow.length;
+  currentActiveSheet.value.rows.slice(0, 15).forEach(r => {
+    if (Array.isArray(r) && r.length > maxCols) maxCols = r.length;
+  });
+
+  const headers = [];
+  for (let i = 0; i < maxCols; i++) {
+    const val = firstRow[i] !== undefined && firstRow[i] !== null ? String(firstRow[i]).trim() : '';
+    headers.push(val || `Kolom ${i + 1}`);
+  }
+  return headers;
+});
+
+// Baris data Excel yang sudah difilter berdasarkan pencarian
+const filteredExcelRows = computed(() => {
+  if (!currentActiveSheet.value?.rows?.length) return [];
+  const rows = currentActiveSheet.value.rows.length > 1
+    ? currentActiveSheet.value.rows.slice(1)
+    : currentActiveSheet.value.rows;
+
+  if (!excelSearchQuery.value.trim()) {
+    return rows;
+  }
+
+  const q = excelSearchQuery.value.toLowerCase().trim();
+  return rows.filter(row => {
+    if (!Array.isArray(row)) return false;
+    return row.some(cell => String(cell ?? '').toLowerCase().includes(q));
+  });
+});
+
+// Salin seluruh isi sheet aktif ke clipboard dalam format TSV (kompatibel Excel & Spreadsheet)
+async function copyActiveExcelSheet() {
+  if (!currentActiveSheet.value?.rows?.length) return;
+  const rows = currentActiveSheet.value.rows;
+  const tsv = rows.map(r => Array.isArray(r) ? r.join('\t') : String(r)).join('\n');
+  try {
+    await navigator.clipboard.writeText(tsv);
+    isExcelCopied.value = true;
+    setTimeout(() => {
+      isExcelCopied.value = false;
+    }, 2000);
+  } catch (err) {
+    console.error('Gagal menyalin data sheet Excel:', err);
+  }
+}
+
+// Salin satu baris tertentu ke clipboard
+async function copyExcelRow(row, rowIdx) {
+  try {
+    const line = Array.isArray(row) ? row.join('\t') : String(row);
+    await navigator.clipboard.writeText(line);
+    copiedRowIndex.value = rowIdx;
+    setTimeout(() => {
+      if (copiedRowIndex.value === rowIdx) {
+        copiedRowIndex.value = null;
+      }
+    }, 1500);
+  } catch (err) {
+    console.error('Gagal menyalin baris:', err);
+  }
+}
+
+// Unduh file asli Excel
+async function downloadActiveExcel() {
+  const currentTab = openTabs.value.find(t => t.id === activeTabId.value);
+  if (currentTab?.excelBlobUrl) {
+    const a = document.createElement('a');
+    a.href = currentTab.excelBlobUrl;
+    a.download = form.value.original_filename || `${form.value.title || 'dokumen'}.xlsx`;
+    a.click();
+    return;
+  }
+  if (form.value.id) {
+    await downloadOriginalFile({
+      id: form.value.id,
+      original_filename: form.value.original_filename || `${form.value.title || 'dokumen'}.xlsx`
+    });
+  }
+}
 
 // Object URL dan loading state untuk menampilkan PDF asli
 const pdfBlobUrl = ref('');
@@ -264,6 +530,8 @@ function getFileTypeBadge(filename) {
   if (ext === 'pdf') return 'PDF';
   if (ext === 'txt') return 'TXT';
   if (ext === 'md') return 'MD';
+  if (ext === 'xlsx' || ext === 'xls') return 'XLSX';
+  if (ext === 'csv') return 'CSV';
   return null;
 }
 
@@ -319,7 +587,7 @@ let autoSaveTimeout = null;
 
 // Picu penyimpanan otomatis setelah jeda mengetik 1.8 detik
 function triggerAutoSave() {
-  if (activeView.value !== 'document' || isDocumentPdf.value) return;
+  if (activeView.value !== 'document' || isDocumentPdf.value || isDocumentExcel.value) return;
 
   const currentTab = openTabs.value.find(t => t.id === activeTabId.value);
   if (currentTab) {
@@ -342,7 +610,7 @@ function triggerAutoSave() {
 
 // Shortcut Keyboard: Ctrl+S atau Cmd+S untuk simpan seketika
 function handleKeydown(e) {
-  if (activeView.value === 'document' && !isDocumentPdf.value) {
+  if (activeView.value === 'document' && !isDocumentPdf.value && !isDocumentExcel.value) {
     if ((e.ctrlKey || e.metaKey) && (e.key === 's' || e.key === 'S')) {
       e.preventDefault();
       handleSave(false);
@@ -585,12 +853,15 @@ onMounted(() => {
   window.addEventListener('click', handleGlobalClick);
   window.addEventListener('scroll', handleDocumentScroll, { passive: true });
   window.addEventListener('keydown', handleKeydown);
+  window.addEventListener('resize', checkTabScroll);
+  nextTick(checkTabScroll);
 });
 
 onBeforeUnmount(() => {
   window.removeEventListener('click', handleGlobalClick);
   window.removeEventListener('scroll', handleDocumentScroll);
   window.removeEventListener('keydown', handleKeydown);
+  window.removeEventListener('resize', checkTabScroll);
   if (autoSaveTimeout) {
     clearTimeout(autoSaveTimeout);
   }
@@ -640,6 +911,7 @@ const filteredTemplates = computed(() => {
 
 // ─── Multi-Tab Logic: Berpindah, Membuka, dan Menutup Tab ──────────────────
 async function switchTab(targetId) {
+  if (isDraggingTab) return;
   if (activeTabId.value === targetId) return;
 
   // 1. Sinkronisasi tab lama sebelum ditinggalkan
@@ -665,6 +937,7 @@ async function switchTab(targetId) {
   // 3. Jika berpindah ke katalog
   if (targetId === 'catalog') {
     window.scrollTo({ top: 0, behavior: 'smooth' });
+    nextTick(checkTabScroll);
     return;
   }
 
@@ -718,8 +991,34 @@ async function switchTab(targetId) {
         }
       }
     }
+  } else if (targetTab.type === 'xlsx') {
+    // Tangani tampilan Spreadsheet Excel
+    excelData.value = targetTab.excelData || null;
+    activeExcelSheetIndex.value = targetTab.activeExcelSheetIndex || 0;
+    excelSearchQuery.value = '';
+
+    if (!targetTab.excelData && targetTab.form.id) {
+      excelLoading.value = true;
+      try {
+        const res = await api.get(`/operational-templates/${targetTab.form.id}/file`, {
+          responseType: 'blob'
+        });
+        const blob = new Blob([res.data]);
+        targetTab.excelBlobUrl = URL.createObjectURL(blob);
+        const arrayBuffer = await blob.arrayBuffer();
+        const parsed = parseExcelWorkbook(arrayBuffer);
+        targetTab.excelData = parsed;
+        if (activeTabId.value === targetId) {
+          excelData.value = parsed;
+        }
+      } catch (err) {
+        console.error('Gagal memuat file Excel dari server:', err);
+      } finally {
+        excelLoading.value = false;
+      }
+    }
   } else {
-    // Non-PDF: Isi editor TipTap dan muat navigasi heading
+    // Non-PDF / Non-Excel (Word / TXT): Isi editor TipTap dan muat navigasi heading
     nextTick(() => {
       if (editor.value) {
         editor.value.setEditable(true);
@@ -739,6 +1038,7 @@ async function switchTab(targetId) {
     } else {
       window.scrollTo({ top: 0, behavior: 'smooth' });
     }
+    checkTabScroll();
   });
 }
 
@@ -752,8 +1052,9 @@ async function openDocument(template) {
   }
 
   const isPdf = template.original_filename?.toLowerCase().endsWith('.pdf') || false;
-  const isDocx = template.original_filename?.toLowerCase().endsWith('.docx') || false;
-  const tabType = isPdf ? 'pdf' : (isDocx ? 'docx' : 'txt');
+  const isXlsx = template.original_filename?.toLowerCase().match(/\.(xlsx|xls|csv)$/) || false;
+  const isDocx = template.original_filename?.toLowerCase().match(/\.(docx|doc)$/) || false;
+  const tabType = isPdf ? 'pdf' : (isXlsx ? 'xlsx' : (isDocx ? 'docx' : 'txt'));
 
   const tabId = `doc-${template.id}`;
   const newTab = {
@@ -771,6 +1072,9 @@ async function openDocument(template) {
       author_name: template.user?.name || 'Agent',
       updated_at: template.updated_at
     },
+    excelData: null,
+    activeExcelSheetIndex: 0,
+    excelBlobUrl: '',
     pdfBlobUrl: '',
     pdfLoading: false,
     autoSaveStatus: '',
@@ -827,6 +1131,7 @@ async function openCreate() {
 // Tutup tab tertentu
 function closeTab(tabId, event) {
   if (event) event.stopPropagation();
+  if (tabId === 'catalog') return; // Tab katalog permanen, tidak bisa ditutup
 
   const idx = openTabs.value.findIndex(t => t.id === tabId);
   if (idx === -1) return;
@@ -836,7 +1141,7 @@ function closeTab(tabId, event) {
   // Peringatan jika masih ada perubahan yang belum tersimpan
   if (tabToClose.isDirty || tabToClose.autoSaveStatus === 'unsaved') {
     const confirmClose = window.confirm(
-      `Template "${tabToClose.form.title || tabToClose.title}" memiliki perubahan yang belum disimpan. Tetap ingin menutup tab ini?`
+      `Template "${tabToClose.form?.title || tabToClose.title}" memiliki perubahan yang belum disimpan. Tetap ingin menutup tab ini?`
     );
     if (!confirmClose) return;
   }
@@ -848,9 +1153,10 @@ function closeTab(tabId, event) {
 
   // Jika tab yang ditutup sedang aktif, pindahkan ke tab terdekat atau ke katalog
   if (activeTabId.value === tabId) {
-    if (openTabs.value.length > 1) {
+    const remainingDocTabs = openTabs.value.filter(t => t.id !== tabId && t.id !== 'catalog');
+    if (remainingDocTabs.length > 0) {
       const nextTab = idx > 0 ? openTabs.value[idx - 1] : openTabs.value[idx + 1];
-      switchTab(nextTab.id);
+      switchTab(nextTab?.id || 'catalog');
     } else {
       switchTab('catalog');
     }
@@ -858,6 +1164,7 @@ function closeTab(tabId, event) {
 
   // Hapus tab dari daftar
   openTabs.value.splice(idx, 1);
+  nextTick(checkTabScroll);
 }
 
 // Kembali ke katalog tanpa menutup tab
@@ -964,6 +1271,65 @@ async function handleFileChange(event) {
       }
       return;
 
+    } else if (ext === 'xlsx' || ext === 'xls' || ext === 'csv') {
+      const arrayBuffer = await file.arrayBuffer();
+      const parsed = parseExcelWorkbook(arrayBuffer);
+
+      // Simpan file asli ke backend via FormData
+      const formData = new FormData();
+      formData.append('file', file);
+      formData.append('title', cleanTitle);
+      formData.append('category', 'SOP');
+      formData.append('content', parsed.plainText.substring(0, 50000) || cleanTitle);
+
+      let createdItem = null;
+      try {
+        const { data: resData } = await api.post('/operational-templates', formData, {
+          headers: {
+            'Content-Type': 'multipart/form-data'
+          }
+        });
+        createdItem = resData?.data;
+        await fetchTemplates();
+      } catch (err) {
+        console.warn('Gagal menyimpan file Excel ke backend:', err);
+      }
+
+      const fileTabId = `excel-${Date.now()}`;
+      const newTab = {
+        id: fileTabId,
+        title: cleanTitle,
+        type: 'xlsx',
+        templateId: createdItem?.id || null,
+        form: {
+          id: createdItem?.id || null,
+          title: cleanTitle,
+          category: 'SOP',
+          content: parsed.plainText.substring(0, 50000) || cleanTitle,
+          original_filename: fileName,
+          file_path: createdItem?.file_path || null,
+          author_name: auth.user?.name || 'Agent',
+          updated_at: createdItem?.updated_at || new Date()
+        },
+        excelData: parsed,
+        activeExcelSheetIndex: 0,
+        excelBlobUrl: URL.createObjectURL(file),
+        autoSaveStatus: 'saved',
+        lastSavedTime: new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }),
+        isDirty: false,
+        activeHeadingId: '',
+        scrollPosition: 0
+      };
+
+      openTabs.value.push(newTab);
+      await switchTab(fileTabId);
+
+      uploadSuccess.value = `File spreadsheet Excel "${fileName}" (${parsed.sheetNames.length} Sheet, ${parsed.totalRows} baris) berhasil dimuat.`;
+      setTimeout(() => {
+        uploadSuccess.value = '';
+      }, 4500);
+      return;
+
     } else if (ext === 'txt' || ext === 'md') {
       const rawText = await file.text();
       parsedHtml = parsePlainTextWithHeadings(rawText);
@@ -996,7 +1362,7 @@ async function handleFileChange(event) {
       openTabs.value.push(newTab);
       await switchTab(fileTabId);
     } else {
-      uploadError.value = 'Format file tidak didukung. Harap upload dokumen .docx, .pdf, .txt, atau .md';
+      uploadError.value = 'Format file tidak didukung. Harap upload dokumen .docx, .pdf, .txt, .md, .xlsx, atau .xls';
       return;
     }
   } catch (err) {
@@ -1172,6 +1538,25 @@ async function downloadActivePdf() {
   }
 }
 
+// Download file asli dari kartu atau tab aktif
+async function downloadOriginalFile(template) {
+  try {
+    const res = await api.get(`/operational-templates/${template.id}/file`, {
+      responseType: 'blob'
+    });
+    const blob = new Blob([res.data]);
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = template.original_filename || `${template.title || 'dokumen'}.xlsx`;
+    a.click();
+    URL.revokeObjectURL(url);
+  } catch (err) {
+    console.error('Gagal mengunduh file asli:', err);
+    alert('Gagal mengunduh file asli dari server.');
+  }
+}
+
 // Download file PDF asli dari kartu
 async function downloadOriginalPdf(template) {
   try {
@@ -1298,105 +1683,152 @@ function formatDate(val) {
   <div class="templates-container">
     
     <!-- ══════════════════════════════════════════════════════════════════════════
-         BILAH TAB GAYA BROWSER (DYNAMIC MULTI-TAB NAVIGATION)
-         Mengadopsi pola tab browser: Katalog pinned di kiri, tab dokumen dinamis,
-         indikator unsaved, badge tipe dokumen, tombol close ×, dan tombol '+' draft
+         BILAH TAB GAYA BROWSER (DYNAMIC MULTI-TAB NAVIGATION - DRAGGABLE & REORDERABLE)
+         Setiap tab (Katalog maupun Dokumen) dapat digeser-geser / ditukar posisinya (drag & drop)
+         sesuai kebutuhan kerja agen.
          ══════════════════════════════════════════════════════════════════════════ -->
     <nav class="browser-tabs-shell" aria-label="Tab Dokumen Operasional">
-      <div class="tabs-scroll-wrapper" ref="tabsScrollEl" @wheel="handleTabsWheel">
-        
-        <!-- Pinned Tab Utama: Katalog Template -->
-        <button
-          type="button"
-          class="browser-tab tab-catalog"
-          :class="{ active: activeTabId === 'catalog' }"
-          @click="switchTab('catalog')"
-          title="Buka Katalog Seluruh Template"
-        >
-          <div class="tab-icon-wrap icon-catalog">
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
-              <rect x="3" y="3" width="7" height="7" rx="1.5"></rect>
-              <rect x="14" y="3" width="7" height="7" rx="1.5"></rect>
-              <rect x="14" y="14" width="7" height="7" rx="1.5"></rect>
-              <rect x="3" y="14" width="7" height="7" rx="1.5"></rect>
-            </svg>
-          </div>
-          <span class="tab-label">Katalog Template</span>
-          <span v-if="templates.length" class="tab-count-pill">{{ templates.length }}</span>
-        </button>
+      <!-- Tombol Navigasi Geser Tab ke Kiri -->
+      <button
+        v-if="canScrollLeft"
+        type="button"
+        class="btn-tab-scroll-arrow btn-scroll-prev"
+        @click="scrollTabs('left')"
+        title="Geser bilah tab ke kiri"
+        aria-label="Geser tab ke kiri"
+      >
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="15 18 9 12 15 6"></polyline>
+        </svg>
+      </button>
 
-        <!-- Dynamic Document Tabs (Word, PDF, Teks, Draft) -->
+      <div
+        class="tabs-scroll-wrapper"
+        ref="tabsScrollEl"
+        @wheel="handleTabsWheel"
+        @scroll="checkTabScroll"
+      >
+        <!-- Daftar Seluruh Tab (Katalog & Dokumen) Yang Dapat Digeser Posisi / Urutannya -->
         <div
-          v-for="tab in openTabs"
+          v-for="(tab, index) in openTabs"
           :key="tab.id"
-          class="browser-tab tab-document"
+          class="browser-tab"
           :class="[
             { active: activeTabId === tab.id },
-            'tab-' + tab.type
+            'tab-' + tab.type,
+            { 'is-catalog-tab': tab.type === 'catalog' },
+            { 'tab-is-dragging': draggedTabIndex === index },
+            { 'tab-drop-before': dropTargetIndex === index && dropPosition === 'before' },
+            { 'tab-drop-after': dropTargetIndex === index && dropPosition === 'after' }
           ]"
+          draggable="true"
+          @dragstart="onTabDragStart($event, index)"
+          @dragover="onTabDragOver($event, index)"
+          @dragleave="onTabDragLeave($event, index)"
+          @drop="onTabDrop($event, index)"
+          @dragend="onTabDragEnd"
           @click="switchTab(tab.id)"
-          :title="tab.form.title || tab.title"
+          :title="tab.type === 'catalog' ? 'Katalog Template (Tahan & geser untuk atur posisi tab)' : (tab.form?.title || tab.title) + ' (Tahan & geser untuk atur posisi tab)'"
         >
-          <!-- Document Type Icon -->
-          <div class="tab-icon-wrap" :class="'icon-' + tab.type">
-            <!-- DOCX Icon -->
-            <svg v-if="tab.type === 'docx'" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
-              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
-              <polyline points="14 2 14 8 20 8"></polyline>
-              <line x1="16" y1="13" x2="8" y2="13"></line>
-              <line x1="16" y1="17" x2="8" y2="17"></line>
-            </svg>
-            <!-- PDF Icon -->
-            <svg v-else-if="tab.type === 'pdf'" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
-              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
-              <polyline points="14 2 14 8 20 8"></polyline>
-              <line x1="12" y1="18" x2="12" y2="12"></line>
-              <line x1="9" y1="15" x2="15" y2="15"></line>
-            </svg>
-            <!-- TXT Icon -->
-            <svg v-else-if="tab.type === 'txt'" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
-              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
-              <polyline points="14 2 14 8 20 8"></polyline>
-              <line x1="16" y1="13" x2="8" y2="13"></line>
-              <line x1="16" y1="17" x2="8" y2="17"></line>
-            </svg>
-            <!-- Draft / Blank Icon -->
-            <svg v-else width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
-              <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
-              <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
-            </svg>
-          </div>
+          <!-- JIKA TAB KATALOG -->
+          <template v-if="tab.type === 'catalog'">
+            <div class="tab-icon-wrap icon-catalog">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="3" y="3" width="7" height="7" rx="1.5"></rect>
+                <rect x="14" y="3" width="7" height="7" rx="1.5"></rect>
+                <rect x="14" y="14" width="7" height="7" rx="1.5"></rect>
+                <rect x="3" y="14" width="7" height="7" rx="1.5"></rect>
+              </svg>
+            </div>
+            <span class="tab-label">Katalog Template</span>
+            <span v-if="templates.length" class="tab-count-pill">{{ templates.length }}</span>
+            <span class="tab-drag-grip" title="Tahan & geser untuk atur urutan">
+              <svg width="8" height="12" viewBox="0 0 8 12" fill="currentColor">
+                <circle cx="2" cy="2" r="1.2"></circle><circle cx="6" cy="2" r="1.2"></circle>
+                <circle cx="2" cy="6" r="1.2"></circle><circle cx="6" cy="6" r="1.2"></circle>
+                <circle cx="2" cy="10" r="1.2"></circle><circle cx="6" cy="10" r="1.2"></circle>
+              </svg>
+            </span>
+          </template>
 
-          <!-- Tab Title -->
-          <span class="tab-label">
-            {{ (activeTabId === tab.id ? form.title : (tab.form.title || tab.title)) || 'Draft Baru' }}
-          </span>
+          <!-- JIKA TAB DOKUMEN (Word, PDF, Teks, Draft) -->
+          <template v-else>
+            <!-- Document Type Icon -->
+            <div class="tab-icon-wrap" :class="'icon-' + tab.type">
+              <!-- DOCX Icon -->
+              <svg v-if="tab.type === 'docx'" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                <polyline points="14 2 14 8 20 8"></polyline>
+                <line x1="16" y1="13" x2="8" y2="13"></line>
+                <line x1="16" y1="17" x2="8" y2="17"></line>
+              </svg>
+              <!-- XLSX Icon -->
+              <svg v-else-if="tab.type === 'xlsx'" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                <polyline points="14 2 14 8 20 8"></polyline>
+                <path d="M8 13h8M8 17h8M12 9v12"></path>
+              </svg>
+              <!-- PDF Icon -->
+              <svg v-else-if="tab.type === 'pdf'" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                <polyline points="14 2 14 8 20 8"></polyline>
+                <line x1="12" y1="18" x2="12" y2="12"></line>
+                <line x1="9" y1="15" x2="15" y2="15"></line>
+              </svg>
+              <!-- TXT Icon -->
+              <svg v-else-if="tab.type === 'txt'" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                <polyline points="14 2 14 8 20 8"></polyline>
+                <line x1="16" y1="13" x2="8" y2="13"></line>
+                <line x1="16" y1="17" x2="8" y2="17"></line>
+              </svg>
+              <!-- Draft / Blank Icon -->
+              <svg v-else width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+                <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
+                <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
+              </svg>
+            </div>
 
-          <!-- Type Chip (Kecil di sebelah judul tab) -->
-          <span class="tab-type-tag" :class="'type-' + tab.type">
-            {{ tab.type.toUpperCase() }}
-          </span>
+            <!-- Tab Title -->
+            <span class="tab-label">
+              {{ (activeTabId === tab.id ? form.title : (tab.form?.title || tab.title)) || 'Draft Baru' }}
+            </span>
 
-          <!-- Unsaved dot indicator -->
-          <span
-            v-if="tab.isDirty || (activeTabId === tab.id && autoSaveStatus === 'unsaved')"
-            class="tab-dirty-indicator"
-            title="Perubahan belum tersimpan"
-          ></span>
+            <!-- Type Chip (Kecil di sebelah judul tab) -->
+            <span class="tab-type-tag" :class="'type-' + tab.type">
+              {{ tab.type.toUpperCase() }}
+            </span>
 
-          <!-- Close button × -->
-          <button
-            type="button"
-            class="btn-tab-close"
-            @click.stop="closeTab(tab.id, $event)"
-            title="Tutup tab"
-            aria-label="Tutup tab"
-          >
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round">
-              <line x1="18" y1="6" x2="6" y2="18"></line>
-              <line x1="6" y1="6" x2="18" y2="18"></line>
-            </svg>
-          </button>
+            <!-- Unsaved dot indicator -->
+            <span
+              v-if="tab.isDirty || (activeTabId === tab.id && autoSaveStatus === 'unsaved')"
+              class="tab-dirty-indicator"
+              title="Perubahan belum tersimpan"
+            ></span>
+
+            <!-- Drag Grip Handle -->
+            <span class="tab-drag-grip" title="Tahan & geser untuk atur urutan">
+              <svg width="8" height="12" viewBox="0 0 8 12" fill="currentColor">
+                <circle cx="2" cy="2" r="1.2"></circle><circle cx="6" cy="2" r="1.2"></circle>
+                <circle cx="2" cy="6" r="1.2"></circle><circle cx="6" cy="6" r="1.2"></circle>
+                <circle cx="2" cy="10" r="1.2"></circle><circle cx="6" cy="10" r="1.2"></circle>
+              </svg>
+            </span>
+
+            <!-- Close button × -->
+            <button
+              type="button"
+              class="btn-tab-close"
+              @click.stop="closeTab(tab.id, $event)"
+              title="Tutup tab"
+              aria-label="Tutup tab"
+            >
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round">
+                <line x1="18" y1="6" x2="6" y2="18"></line>
+                <line x1="6" y1="6" x2="18" y2="18"></line>
+              </svg>
+            </button>
+          </template>
         </div>
 
         <!-- Add New Tab '+' Button -->
@@ -1414,6 +1846,20 @@ function formatDate(val) {
         </button>
 
       </div>
+
+      <!-- Tombol Navigasi Geser Tab ke Kanan -->
+      <button
+        v-if="canScrollRight"
+        type="button"
+        class="btn-tab-scroll-arrow btn-scroll-next"
+        @click="scrollTabs('right')"
+        title="Geser bilah tab ke kanan"
+        aria-label="Geser tab ke kanan"
+      >
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="9 18 15 12 9 6"></polyline>
+        </svg>
+      </button>
     </nav>
     
     <!-- ══════════════════════════════════════════════════════════════════════════
@@ -1447,7 +1893,7 @@ function formatDate(val) {
           <input
             type="file"
             ref="fileInput"
-            accept=".docx,.pdf,.txt,.md"
+            accept=".docx,.pdf,.txt,.md,.xlsx,.xls,.csv"
             class="hidden-file-input"
             @change="handleFileChange"
           />
@@ -1457,7 +1903,7 @@ function formatDate(val) {
             class="btn-outline-upload"
             @click="triggerFileInput"
             :disabled="fileProcessing"
-            title="Unggah template dari file .docx, .pdf, atau .txt"
+            title="Unggah template dari file .docx, .pdf, .txt, atau spreadsheet .xlsx/.xls/.csv"
           >
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
               <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
@@ -1662,6 +2108,20 @@ function formatDate(val) {
                   <span>Unduh PDF Asli (.pdf)</span>
                 </button>
 
+                <button
+                  v-else-if="template.original_filename?.toLowerCase().match(/\.(xlsx|xls|csv)$/)"
+                  type="button"
+                  class="popover-item"
+                  @click="downloadOriginalFile(template); activeMenuId = null"
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                    <polyline points="14 2 14 8 20 8"></polyline>
+                    <path d="M8 13h8M8 17h8M12 9v12"></path>
+                  </svg>
+                  <span>Unduh Excel Asli (.xlsx)</span>
+                </button>
+
                 <template v-else>
                   <button type="button" class="popover-item" @click="downloadAsDocx(template); activeMenuId = null">
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -1766,7 +2226,7 @@ function formatDate(val) {
             <span class="btn-text-responsive">{{ isDocumentCopied ? 'Tersalin' : 'Salin' }}</span>
           </button>
 
-          <!-- Export DOCX / TXT untuk Word/Text, atau Unduh PDF untuk Dokumen PDF -->
+          <!-- Export DOCX / TXT untuk Word/Text, atau Unduh PDF / Excel -->
           <button
             v-if="isDocumentPdf"
             type="button"
@@ -1780,6 +2240,21 @@ function formatDate(val) {
               <line x1="12" y1="15" x2="12" y2="3"></line>
             </svg>
             <span class="btn-text-responsive">Unduh PDF</span>
+          </button>
+
+          <button
+            v-else-if="isDocumentExcel"
+            type="button"
+            class="btn-action btn-download btn-download-excel"
+            @click="downloadActiveExcel"
+            title="Unduh file spreadsheet Excel asli (.xlsx)"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+              <polyline points="7 10 12 15 17 10"></polyline>
+              <line x1="12" y1="15" x2="12" y2="3"></line>
+            </svg>
+            <span class="btn-text-responsive">Unduh Excel</span>
           </button>
 
           <div v-else class="download-dropdown">
@@ -2201,6 +2676,185 @@ function formatDate(val) {
         </div>
       </div>
 
+      <!-- ══════════════════════════════════════════════════════════════════════════
+           JIKA DOKUMEN SPREADSHEET EXCEL (.XLSX / .XLS / .CSV)
+           Tampilkan Spreadsheet Grid Interaktif dengan Pilihan Sheet, Pencarian Baris,
+           dan Salin Tabel / Baris
+           ══════════════════════════════════════════════════════════════════════════ -->
+      <div v-else-if="isDocumentExcel" class="excel-viewer-wrapper">
+        <!-- Top Toolbar Excel -->
+        <div class="excel-quick-toolbar">
+          <div class="excel-info-left">
+            <div class="excel-file-badge">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                <polyline points="14 2 14 8 20 8"></polyline>
+                <line x1="8" y1="13" x2="16" y2="13"></line>
+                <line x1="8" y1="17" x2="16" y2="17"></line>
+                <line x1="10" y1="9" x2="8" y2="9"></line>
+              </svg>
+              <span>{{ form.original_filename || 'Dokumen.xlsx' }}</span>
+            </div>
+            <span v-if="excelData" class="excel-stats-pill">
+              {{ excelData.sheetNames.length }} Sheet &bull; {{ currentActiveSheet?.rows?.length || 0 }} Baris
+            </span>
+          </div>
+
+          <div class="excel-actions-right">
+            <!-- Search baris dalam sheet Excel -->
+            <div class="excel-search-box">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+                <circle cx="11" cy="11" r="8"></circle>
+                <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+              </svg>
+              <input
+                type="text"
+                v-model="excelSearchQuery"
+                class="excel-search-input"
+                placeholder="Cari baris/data di sheet ini..."
+              />
+              <button
+                v-if="excelSearchQuery"
+                type="button"
+                class="btn-clear-excel-search"
+                @click="excelSearchQuery = ''"
+              >
+                &times;
+              </button>
+            </div>
+
+            <!-- Tombol Salin Seluruh Sheet (TSV / Format Excel) -->
+            <button
+              type="button"
+              class="btn-excel-tool btn-copy-excel"
+              :class="{ 'btn-excel-copied': isExcelCopied }"
+              @click="copyActiveExcelSheet"
+              title="Salin seluruh data sheet ke clipboard (format tabel)"
+            >
+              <svg v-if="isExcelCopied" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                <polyline points="20 6 9 17 4 12"></polyline>
+              </svg>
+              <svg v-else width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+              </svg>
+              <span>{{ isExcelCopied ? 'Tersalin!' : 'Salin Sheet' }}</span>
+            </button>
+
+            <!-- Unduh File Asli Excel -->
+            <button
+              type="button"
+              class="btn-excel-tool btn-download-excel"
+              @click="downloadActiveExcel"
+              title="Unduh file spreadsheet Excel asli (.xlsx)"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                <polyline points="7 10 12 15 17 10"></polyline>
+                <line x1="12" y1="15" x2="12" y2="3"></line>
+              </svg>
+              <span>Unduh .xlsx</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- Sheet Selector Tabs (Jika Workbook Memiliki Beberapa Sheet) -->
+        <div v-if="excelData && excelData.sheetNames.length > 1" class="excel-sheet-tabs-bar">
+          <button
+            v-for="(sheetName, idx) in excelData.sheetNames"
+            :key="sheetName"
+            type="button"
+            class="excel-sheet-tab"
+            :class="{ active: activeExcelSheetIndex === idx }"
+            @click="activeExcelSheetIndex = idx"
+          >
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+              <line x1="3" y1="9" x2="21" y2="9"></line>
+              <line x1="9" y1="21" x2="9" y2="9"></line>
+            </svg>
+            <span>{{ sheetName }}</span>
+            <span class="sheet-count-tag">{{ excelData.sheets[idx]?.rows?.length || 0 }}</span>
+          </button>
+        </div>
+
+        <!-- Loading State Excel -->
+        <div v-if="excelLoading" class="excel-loading-state">
+          <div class="loading-spinner-sm"></div>
+          <span>Membaca dan memproses spreadsheet Excel...</span>
+        </div>
+
+        <!-- Grid Tabel Spreadsheet Interaktif -->
+        <div v-else-if="filteredExcelRows.length > 0" class="excel-grid-container">
+          <table class="excel-rendered-table">
+            <thead>
+              <tr>
+                <th class="th-row-num">#</th>
+                <th
+                  v-for="(headerCol, colIdx) in excelHeaderColumns"
+                  :key="colIdx"
+                  class="th-col"
+                >
+                  {{ headerCol }}
+                </th>
+                <th class="th-action">Aksi</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr
+                v-for="(row, rowIdx) in filteredExcelRows"
+                :key="rowIdx"
+                class="excel-row"
+              >
+                <!-- Row Number -->
+                <td class="td-row-num">{{ rowIdx + 1 }}</td>
+                <!-- Cell Data -->
+                <td
+                  v-for="(colName, colIdx) in excelHeaderColumns"
+                  :key="colIdx"
+                  class="td-cell"
+                  :title="String(row[colIdx] ?? '')"
+                >
+                  {{ row[colIdx] ?? '' }}
+                </td>
+                <!-- Copy Row Button -->
+                <td class="td-action">
+                  <button
+                    type="button"
+                    class="btn-copy-row"
+                    @click="copyExcelRow(row, rowIdx)"
+                    :title="copiedRowIndex === rowIdx ? 'Tersalin!' : 'Salin baris ini'"
+                  >
+                    <svg v-if="copiedRowIndex === rowIdx" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                      <polyline points="20 6 9 17 4 12"></polyline>
+                    </svg>
+                    <svg v-else width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                      <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                    </svg>
+                  </button>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <!-- Empty / No Rows Matching State -->
+        <div v-else class="excel-empty-state">
+          <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="#94a3b8" stroke-width="1.8">
+            <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+            <line x1="3" y1="9" x2="21" y2="9"></line>
+            <line x1="9" y1="21" x2="9" y2="9"></line>
+          </svg>
+          <p class="empty-title">
+            {{ excelSearchQuery ? 'Tidak ada data yang cocok dengan pencarian' : 'Sheet ini kosong atau tidak memiliki baris data' }}
+          </p>
+          <button v-if="excelSearchQuery" type="button" class="btn-clear-search-pill" @click="excelSearchQuery = ''">
+            Reset Pencarian
+          </button>
+        </div>
+      </div>
+
       <!-- Jika Non-PDF (Word/TXT): Lembar Dokumen TipTap Langsung Diedit dengan Navigasi Heading di Kiri -->
       <div v-else class="doc-body-wrapper">
         <div class="doc-editor-layout">
@@ -2555,12 +3209,15 @@ function formatDate(val) {
   background: #f1f5f9;
   border: 1px solid #e2e8f0;
   border-radius: 14px 14px 0 0;
-  padding: 8px 12px 0 12px;
+  padding: 8px 8px 0 8px;
   box-shadow: inset 0 -1px 0 #e2e8f0;
   margin-bottom: -1px;
   position: sticky;
   top: 56px;
   z-index: 25;
+  display: flex;
+  align-items: flex-end;
+  gap: 4px;
 }
 
 .tabs-scroll-wrapper {
@@ -2569,17 +3226,13 @@ function formatDate(val) {
   gap: 6px;
   overflow-x: auto;
   overflow-y: hidden;
-  scrollbar-width: thin;
+  scrollbar-width: none;
   padding-bottom: 0px;
+  flex: 1;
 }
 
 .tabs-scroll-wrapper::-webkit-scrollbar {
-  height: 4px;
-}
-
-.tabs-scroll-wrapper::-webkit-scrollbar-thumb {
-  background: #cbd5e1;
-  border-radius: 4px;
+  display: none;
 }
 
 .browser-tab {
@@ -2587,7 +3240,7 @@ function formatDate(val) {
   align-items: center;
   gap: 8px;
   height: 40px;
-  padding: 0 14px;
+  padding: 0 12px 0 14px;
   border-radius: 10px 10px 0 0;
   border: 1.5px solid transparent;
   border-bottom: none;
@@ -2595,19 +3248,116 @@ function formatDate(val) {
   color: #475569;
   font-size: 0.84rem;
   font-weight: 600;
-  cursor: pointer;
+  cursor: grab;
   white-space: nowrap;
   user-select: none;
-  transition: all 0.16s ease;
+  transition: transform 0.15s ease, background 0.16s ease, border-color 0.16s ease, opacity 0.15s ease;
   position: relative;
   max-width: 260px;
   flex-shrink: 0;
+}
+
+.browser-tab:active {
+  cursor: grabbing;
 }
 
 .browser-tab:hover:not(.active) {
   background: #ffffffa0;
   color: #0f172a;
   border-color: #cbd5e1;
+}
+
+/* Sedang di-drag */
+.tab-is-dragging {
+  opacity: 0.45 !important;
+  transform: scale(0.96);
+  border: 1.5px dashed #06b6d4 !important;
+  border-bottom: none !important;
+  background: #e0f2fe !important;
+}
+
+/* Indikator posisi drop */
+.tab-drop-before {
+  position: relative;
+}
+
+.tab-drop-before::before {
+  content: '';
+  position: absolute;
+  left: -4px;
+  top: 4px;
+  bottom: 0px;
+  width: 4px;
+  background: #06b6d4;
+  border-radius: 4px;
+  box-shadow: 0 0 8px rgba(6, 182, 212, 0.9);
+  z-index: 30;
+  pointer-events: none;
+  animation: dropGlow 0.8s infinite alternate;
+}
+
+.tab-drop-after {
+  position: relative;
+}
+
+.tab-drop-after::after {
+  content: '';
+  position: absolute;
+  right: -4px;
+  top: 4px;
+  bottom: 0px;
+  width: 4px;
+  background: #06b6d4;
+  border-radius: 4px;
+  box-shadow: 0 0 8px rgba(6, 182, 212, 0.9);
+  z-index: 30;
+  pointer-events: none;
+  animation: dropGlow 0.8s infinite alternate;
+}
+
+@keyframes dropGlow {
+  0% { opacity: 0.6; }
+  100% { opacity: 1; transform: scaleY(1.05); }
+}
+
+.tab-drag-grip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #94a3b8;
+  opacity: 0.35;
+  margin-left: 2px;
+  transition: opacity 0.15s;
+  pointer-events: none;
+}
+
+.browser-tab:hover .tab-drag-grip {
+  opacity: 0.8;
+  color: #06b6d4;
+}
+
+/* Tombol panah geser bilah tab */
+.btn-tab-scroll-arrow {
+  width: 28px;
+  height: 32px;
+  margin-bottom: 4px;
+  border-radius: 6px;
+  border: 1px solid #cbd5e1;
+  background: #ffffff;
+  color: #475569;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: all 0.15s ease;
+}
+
+.btn-tab-scroll-arrow:hover {
+  background: #06b6d4;
+  color: #ffffff;
+  border-color: #06b6d4;
+  box-shadow: 0 2px 6px rgba(6, 182, 212, 0.25);
 }
 
 /* Active tab style matching reference image with cyan/teal accent */
@@ -2650,6 +3400,11 @@ function formatDate(val) {
 .icon-docx {
   color: #0284c7;
   background: #e0f2fe;
+}
+
+.icon-xlsx {
+  color: #059669;
+  background: #d1fae5;
 }
 
 .icon-pdf {
@@ -2698,6 +3453,11 @@ function formatDate(val) {
   color: #0369a1;
 }
 
+.type-xlsx {
+  background: #d1fae5;
+  color: #047857;
+}
+
 .type-pdf {
   background: #fee2e2;
   color: #b91c1c;
@@ -2711,6 +3471,330 @@ function formatDate(val) {
 .type-draft {
   background: #fef3c7;
   color: #b45309;
+}
+
+.badge-xlsx,
+.badge-csv {
+  background: #d1fae5;
+  color: #047857;
+  border: 1px solid #6ee7b7;
+}
+
+/* ─── Excel Spreadsheet Interactive Viewer Styles ─────────────────────────── */
+.excel-viewer-wrapper {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  background: #ffffff;
+  border-radius: 12px;
+  padding: 16px;
+  border: 1px solid #e2e8f0;
+}
+
+.excel-quick-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding-bottom: 12px;
+  border-bottom: 1px solid #f1f5f9;
+}
+
+.excel-info-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.excel-file-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  border-radius: 8px;
+  background: #ecfdf5;
+  color: #065f46;
+  font-size: 0.84rem;
+  font-weight: 700;
+  border: 1px solid #a7f3d0;
+}
+
+.excel-stats-pill {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: #64748b;
+  background: #f1f5f9;
+  padding: 4px 10px;
+  border-radius: 999px;
+}
+
+.excel-actions-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.excel-search-box {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.excel-search-box svg {
+  position: absolute;
+  left: 10px;
+  color: #94a3b8;
+  pointer-events: none;
+}
+
+.excel-search-input {
+  height: 34px;
+  padding: 0 28px 0 32px;
+  border-radius: 8px;
+  border: 1px solid #cbd5e1;
+  font-size: 0.8rem;
+  width: 220px;
+  background: #f8fafc;
+  color: #1e293b;
+  transition: all 0.15s ease;
+}
+
+.excel-search-input:focus {
+  outline: none;
+  border-color: #10b981;
+  background: #ffffff;
+  box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.15);
+}
+
+.btn-clear-excel-search {
+  position: absolute;
+  right: 6px;
+  background: transparent;
+  border: none;
+  color: #94a3b8;
+  font-size: 16px;
+  cursor: pointer;
+  line-height: 1;
+}
+
+.btn-excel-tool {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 34px;
+  padding: 0 12px;
+  border-radius: 8px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  user-select: none;
+}
+
+.btn-copy-excel {
+  background: #f0fdf4;
+  border: 1px solid #bbf7d0;
+  color: #15803d;
+}
+
+.btn-copy-excel:hover {
+  background: #dcfce7;
+  border-color: #86efac;
+}
+
+.btn-excel-copied {
+  background: #15803d !important;
+  color: #ffffff !important;
+  border-color: #15803d !important;
+}
+
+.btn-download-excel {
+  background: #ffffff;
+  border: 1px solid #cbd5e1;
+  color: #334155;
+}
+
+.btn-download-excel:hover {
+  background: #ecfdf5;
+  border-color: #10b981;
+  color: #047857;
+}
+
+/* Sheet Tabs */
+.excel-sheet-tabs-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  overflow-x: auto;
+  padding: 4px 0;
+  border-bottom: 1px solid #e2e8f0;
+}
+
+.excel-sheet-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 14px;
+  border-radius: 8px 8px 0 0;
+  border: 1px solid transparent;
+  border-bottom: none;
+  background: #f1f5f9;
+  color: #64748b;
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.15s ease;
+}
+
+.excel-sheet-tab:hover:not(.active) {
+  background: #e2e8f0;
+  color: #0f172a;
+}
+
+.excel-sheet-tab.active {
+  background: #ecfdf5;
+  border-color: #a7f3d0;
+  color: #065f46;
+  font-weight: 700;
+  border-bottom: 2px solid #10b981;
+}
+
+.sheet-count-tag {
+  font-size: 0.68rem;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.05);
+}
+
+.excel-sheet-tab.active .sheet-count-tag {
+  background: #d1fae5;
+  color: #047857;
+}
+
+/* Grid Table */
+.excel-grid-container {
+  max-height: 550px;
+  overflow: auto;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.excel-rendered-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.82rem;
+  text-align: left;
+}
+
+.excel-rendered-table thead {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  background: #f8fafc;
+}
+
+.excel-rendered-table th {
+  padding: 9px 12px;
+  font-weight: 700;
+  color: #1e293b;
+  border: 1px solid #e2e8f0;
+  background: #f8fafc;
+  white-space: nowrap;
+}
+
+.th-row-num {
+  width: 45px;
+  text-align: center;
+  color: #94a3b8;
+  background: #f1f5f9 !important;
+}
+
+.th-action {
+  width: 55px;
+  text-align: center;
+}
+
+.excel-row {
+  transition: background 0.1s ease;
+}
+
+.excel-row:nth-child(even) {
+  background: #fafafa;
+}
+
+.excel-row:hover {
+  background: #ecfdf5 !important;
+}
+
+.td-row-num {
+  text-align: center;
+  color: #94a3b8;
+  font-weight: 600;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+}
+
+.td-cell {
+  padding: 7px 12px;
+  border: 1px solid #e2e8f0;
+  color: #334155;
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.td-action {
+  text-align: center;
+  border: 1px solid #e2e8f0;
+  padding: 4px;
+}
+
+.btn-copy-row {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 4px;
+  border: 1px solid #e2e8f0;
+  background: #ffffff;
+  color: #64748b;
+  cursor: pointer;
+  transition: all 0.12s ease;
+}
+
+.btn-copy-row:hover {
+  background: #ecfdf5;
+  border-color: #10b981;
+  color: #047857;
+}
+
+.excel-loading-state,
+.excel-empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 40px 20px;
+  gap: 10px;
+  color: #64748b;
+}
+
+.btn-clear-search-pill {
+  padding: 6px 14px;
+  border-radius: 8px;
+  background: #f1f5f9;
+  border: 1px solid #cbd5e1;
+  color: #475569;
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
 }
 
 .tab-dirty-indicator {
