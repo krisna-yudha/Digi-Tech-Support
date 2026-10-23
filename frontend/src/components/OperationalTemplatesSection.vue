@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, onMounted, onBeforeUnmount, nextTick } from 'vue';
+import { ref, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue';
 import JSZip from 'jszip';
 import mammoth from 'mammoth';
 import { useEditor, EditorContent } from '@tiptap/vue-3';
@@ -281,16 +281,265 @@ const editor = useEditor({
     attributes: {
       class: 'tiptap-editor-body'
     }
+  },
+  onUpdate: () => {
+    debouncedRefreshHeadings();
+  }
+});
+
+// ─── State Navigasi Heading ala Microsoft Word (Sebelah Kanan) ────────────────
+const showHeadingNav = ref(true);
+const navSearchQuery = ref('');
+const activeHeadingId = ref('');
+const collapsedHeadings = ref(new Set());
+const headingsList = ref([]);
+const navActiveTab = ref('headings'); // 'headings' | 'stats'
+const copiedHeadingId = ref(null);
+let refreshHeadingsTimeout = null;
+let isScrollingProgrammatically = false;
+
+// Ekstrak & index seluruh heading (H1, H2, H3, H4) di dalam editor TipTap
+function refreshHeadings() {
+  nextTick(() => {
+    const editorEl = document.querySelector('.tiptap-editor-body');
+    if (!editorEl) {
+      headingsList.value = [];
+      return;
+    }
+
+    const elements = editorEl.querySelectorAll('h1, h2, h3, h4');
+    const items = [];
+
+    elements.forEach((el, index) => {
+      const id = `doc-heading-${index}`;
+      el.id = id;
+      el.setAttribute('data-heading-id', id);
+
+      const tag = el.tagName.toUpperCase();
+      const level = parseInt(tag.replace('H', ''), 10) || 1;
+      const rawText = (el.innerText || el.textContent || '').trim();
+
+      items.push({
+        index,
+        id,
+        level,
+        tag,
+        text: rawText || `(Heading ${level} tanpa judul)`,
+        hasChildren: false
+      });
+    });
+
+    // Deteksi relasi parent-child: jika heading berikutnya memiliki level lebih dalam
+    for (let i = 0; i < items.length; i++) {
+      const current = items[i];
+      const next = items[i + 1];
+      current.hasChildren = !!(next && next.level > current.level);
+    }
+
+    headingsList.value = items;
+
+    // Defaultkan activeHeadingId jika belum terpilih
+    if (items.length > 0 && (!activeHeadingId.value || !items.some(h => h.id === activeHeadingId.value))) {
+      activeHeadingId.value = items[0].id;
+    }
+  });
+}
+
+function debouncedRefreshHeadings() {
+  if (refreshHeadingsTimeout) clearTimeout(refreshHeadingsTimeout);
+  refreshHeadingsTimeout = setTimeout(() => {
+    refreshHeadings();
+  }, 200);
+}
+
+// Cek apakah heading disembunyikan karena heading induknya di-collapse
+function isHeadingHidden(item) {
+  if (navSearchQuery.value.trim()) {
+    return false; // Tampilkan semua saat pencarian aktif
+  }
+  for (let i = item.index - 1; i >= 0; i--) {
+    const prev = headingsList.value[i];
+    if (prev.level < item.level) {
+      if (collapsedHeadings.value.has(prev.id)) {
+        return true;
+      }
+    }
+    if (prev.level === 1 && item.level > 1) {
+      if (collapsedHeadings.value.has(prev.id)) {
+        return true;
+      }
+      break;
+    }
+  }
+  return false;
+}
+
+// Filter heading berdasarkan query pencarian atau status collapse
+const filteredHeadings = computed(() => {
+  const q = navSearchQuery.value.trim().toLowerCase();
+  if (!q) {
+    return headingsList.value.filter(h => !isHeadingHidden(h));
+  }
+  return headingsList.value.filter(h => h.text.toLowerCase().includes(q));
+});
+
+// Toggle collapse/expand pada sub-heading tertentu
+function toggleCollapseHeading(id, e) {
+  if (e) e.stopPropagation();
+  const nextSet = new Set(collapsedHeadings.value);
+  if (nextSet.has(id)) {
+    nextSet.delete(id);
+  } else {
+    nextSet.add(id);
+  }
+  collapsedHeadings.value = nextSet;
+}
+
+function expandAllHeadings() {
+  collapsedHeadings.value = new Set();
+}
+
+function collapseAllHeadings() {
+  const set = new Set();
+  headingsList.value.forEach(h => {
+    if (h.hasChildren) set.add(h.id);
+  });
+  collapsedHeadings.value = set;
+}
+
+// Melompat ke posisi heading dengan efek kilau animasi highlight
+function scrollToHeading(item) {
+  activeHeadingId.value = item.id;
+  isScrollingProgrammatically = true;
+
+  let el = document.getElementById(item.id);
+  if (!el) {
+    const editorEl = document.querySelector('.tiptap-editor-body');
+    const all = editorEl?.querySelectorAll('h1, h2, h3, h4');
+    if (all && all[item.index]) {
+      el = all[item.index];
+      el.id = item.id;
+    }
+  }
+
+  if (el) {
+    const rect = el.getBoundingClientRect();
+    const topOffset = 85;
+    const targetY = window.pageYOffset + rect.top - topOffset;
+
+    window.scrollTo({
+      top: Math.max(0, targetY),
+      behavior: 'smooth'
+    });
+
+    el.classList.remove('heading-jump-highlight');
+    void el.offsetWidth;
+    el.classList.add('heading-jump-highlight');
+    setTimeout(() => {
+      el.classList.remove('heading-jump-highlight');
+      isScrollingProgrammatically = false;
+    }, 1800);
+  } else {
+    isScrollingProgrammatically = false;
+  }
+
+  // Pada mobile: otomatis sembunyikan panel setelah memilih heading
+  if (window.innerWidth <= 768) {
+    showHeadingNav.value = false;
+  }
+}
+
+// Salin judul heading tertentu
+async function copyHeadingText(item) {
+  try {
+    await navigator.clipboard.writeText(item.text);
+    copiedHeadingId.value = item.id;
+    setTimeout(() => {
+      if (copiedHeadingId.value === item.id) {
+        copiedHeadingId.value = null;
+      }
+    }, 1500);
+  } catch (err) {
+    console.error('Gagal menyalin judul:', err);
+  }
+}
+
+// ScrollSpy: Mendeteksi heading aktif saat dokumen digulir
+function handleDocumentScroll() {
+  if (isScrollingProgrammatically || !headingsList.value.length || activeView.value !== 'document' || isDocumentPdf.value) {
+    return;
+  }
+
+  const scrollPos = window.scrollY + 120;
+  let currentId = null;
+
+  for (let i = 0; i < headingsList.value.length; i++) {
+    const h = headingsList.value[i];
+    const el = document.getElementById(h.id);
+    if (el) {
+      if (el.offsetTop <= scrollPos) {
+        currentId = h.id;
+      } else {
+        break;
+      }
+    }
+  }
+
+  if (currentId && currentId !== activeHeadingId.value) {
+    activeHeadingId.value = currentId;
+    const navItemEl = document.querySelector(`[data-nav-id="${currentId}"]`);
+    if (navItemEl) {
+      navItemEl.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    }
+  }
+}
+
+// Statistik Distribusi Heading
+const headingStats = computed(() => {
+  const total = headingsList.value.length;
+  const h1Count = headingsList.value.filter(h => h.level === 1).length;
+  const h2Count = headingsList.value.filter(h => h.level === 2).length;
+  const h3Count = headingsList.value.filter(h => h.level >= 3).length;
+  return { total, h1Count, h2Count, h3Count };
+});
+
+// Statistik Dokumen Keseluruhan
+const documentStats = computed(() => {
+  if (!editor.value) {
+    return { wordCount: 0, charCount: 0, readTimeMinutes: 1 };
+  }
+  const text = editor.value.getText() || '';
+  const trimmed = text.trim();
+  const words = trimmed ? trimmed.split(/\s+/).length : 0;
+  const chars = text.length;
+  const readTime = Math.max(1, Math.ceil(words / 200));
+  return {
+    wordCount: words,
+    charCount: chars,
+    readTimeMinutes: readTime
+  };
+});
+
+watch(activeView, (newVal) => {
+  if (newVal === 'document') {
+    nextTick(() => {
+      refreshHeadings();
+    });
   }
 });
 
 onMounted(() => {
   fetchTemplates();
   window.addEventListener('click', handleGlobalClick);
+  window.addEventListener('scroll', handleDocumentScroll, { passive: true });
 });
 
 onBeforeUnmount(() => {
   window.removeEventListener('click', handleGlobalClick);
+  window.removeEventListener('scroll', handleDocumentScroll);
+  if (refreshHeadingsTimeout) {
+    clearTimeout(refreshHeadingsTimeout);
+  }
   if (pdfBlobUrl.value) {
     URL.revokeObjectURL(pdfBlobUrl.value);
   }
@@ -367,6 +616,7 @@ async function openDocument(template) {
       if (editor.value) {
         editor.value.setEditable(true);
         editor.value.commands.setContent(template.content || '<p></p>');
+        refreshHeadings();
       }
     });
   }
@@ -398,6 +648,7 @@ function openCreate() {
       editor.value.setEditable(true);
       editor.value.commands.setContent('<p></p>');
       editor.value.commands.focus();
+      refreshHeadings();
     }
   });
   window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -469,6 +720,7 @@ async function handleFileChange(event) {
         if (editor.value) {
           editor.value.setEditable(true);
           editor.value.commands.setContent(parsedHtml || '<p></p>');
+          refreshHeadings();
         }
       });
       window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -521,6 +773,7 @@ async function handleFileChange(event) {
         if (editor.value) {
           editor.value.setEditable(true);
           editor.value.commands.setContent(parsedHtml || '<p></p>');
+          refreshHeadings();
         }
       });
       window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -1448,6 +1701,29 @@ function formatDate(val) {
             </svg>
           </button>
         </div>
+
+        <div class="toolbar-spacer"></div>
+
+        <!-- Tombol Toggle Navigasi Heading (MS Word Style) -->
+        <div class="toolbar-nav-toggle-group">
+          <button
+            type="button"
+            class="tb-btn tb-btn-nav"
+            :class="{ active: showHeadingNav }"
+            @click="showHeadingNav = !showHeadingNav"
+            :title="showHeadingNav ? 'Tutup panel navigasi heading' : 'Buka panel navigasi heading di sebelah kanan'"
+          >
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+              <line x1="21" y1="6" x2="3" y2="6"></line>
+              <line x1="15" y1="12" x2="3" y2="12"></line>
+              <line x1="17" y1="18" x2="3" y2="18"></line>
+            </svg>
+            <span class="tb-btn-nav-text">Navigasi Heading</span>
+            <span v-if="headingsList.length" class="tb-nav-count-badge">
+              {{ headingsList.length }}
+            </span>
+          </button>
+        </div>
       </div>
 
       <!-- Jika Dokumen PDF Patokan Baku: Tampilkan Langsung File PDF Asli Tanpa Mengubah Format -->
@@ -1513,10 +1789,270 @@ function formatDate(val) {
         </div>
       </div>
 
-      <!-- Jika Non-PDF (Word/TXT): Lembar Dokumen TipTap Langsung Diedit -->
+      <!-- Jika Non-PDF (Word/TXT): Lembar Dokumen TipTap Langsung Diedit dengan Navigasi Heading di Kanan -->
       <div v-else class="doc-body-wrapper">
-        <div class="doc-paper-sheet">
-          <EditorContent :editor="editor" />
+        <div class="doc-editor-layout">
+          
+          <!-- Lembar Kertas Dokumen TipTap Utama -->
+          <div class="doc-paper-sheet">
+            <EditorContent :editor="editor" />
+          </div>
+
+          <!-- Panel Navigasi Heading ala Microsoft Word di Sebelah Kanan -->
+          <aside
+            v-if="showHeadingNav"
+            class="word-nav-pane"
+            aria-label="Panel Navigasi Heading Word"
+          >
+            <!-- Header Panel Navigasi -->
+            <div class="word-nav-header">
+              <div class="word-nav-title-wrap">
+                <svg class="word-nav-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                  <polyline points="14 2 14 8 20 8"></polyline>
+                  <line x1="16" y1="13" x2="8" y2="13"></line>
+                  <line x1="16" y1="17" x2="8" y2="17"></line>
+                  <polyline points="10 9 9 9 8 9"></polyline>
+                </svg>
+                <span class="word-nav-title">Navigation</span>
+                <span v-if="headingsList.length" class="word-nav-badge">
+                  {{ headingsList.length }}
+                </span>
+              </div>
+              <button
+                type="button"
+                class="btn-word-nav-close"
+                @click="showHeadingNav = false"
+                title="Tutup panel navigasi"
+                aria-label="Tutup panel navigasi"
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                  <line x1="18" y1="6" x2="6" y2="18"></line>
+                  <line x1="6" y1="6" x2="18" y2="18"></line>
+                </svg>
+              </button>
+            </div>
+
+            <!-- Search Document Box (Persis MS Word) -->
+            <div class="word-nav-search-wrap">
+              <svg class="word-search-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+                <circle cx="11" cy="11" r="8"></circle>
+                <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+              </svg>
+              <input
+                type="text"
+                v-model="navSearchQuery"
+                class="word-search-input"
+                placeholder="Search document..."
+                aria-label="Search document"
+              />
+              <button
+                v-if="navSearchQuery"
+                type="button"
+                class="btn-word-search-clear"
+                @click="navSearchQuery = ''"
+                aria-label="Hapus pencarian"
+              >
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4">
+                  <line x1="18" y1="6" x2="6" y2="18"></line>
+                  <line x1="6" y1="6" x2="18" y2="18"></line>
+                </svg>
+              </button>
+            </div>
+
+            <!-- Tab Menu Navigasi (Headings / Ringkasan) -->
+            <div class="word-nav-tabs">
+              <button
+                type="button"
+                class="word-tab-btn"
+                :class="{ active: navActiveTab === 'headings' }"
+                @click="navActiveTab = 'headings'"
+              >
+                <span>Headings</span>
+                <span class="tab-count-pill">{{ filteredHeadings.length }}</span>
+              </button>
+              <button
+                type="button"
+                class="word-tab-btn"
+                :class="{ active: navActiveTab === 'stats' }"
+                @click="navActiveTab = 'stats'"
+              >
+                <span>Ringkasan</span>
+              </button>
+            </div>
+
+            <!-- TAB 1: HEADINGS TREE VIEW -->
+            <div v-if="navActiveTab === 'headings'" class="word-nav-content">
+              <!-- Controls Bar: Expand / Collapse All -->
+              <div v-if="headingsList.length && !navSearchQuery" class="word-nav-controls">
+                <span class="controls-label">STRUKTUR JUDUL</span>
+                <div class="controls-btns">
+                  <button
+                    type="button"
+                    class="btn-ctrl-action"
+                    @click="expandAllHeadings"
+                    title="Buka semua sub-heading"
+                  >
+                    Buka Semua
+                  </button>
+                  <span class="ctrl-sep">&bull;</span>
+                  <button
+                    type="button"
+                    class="btn-ctrl-action"
+                    @click="collapseAllHeadings"
+                    title="Tutup semua sub-heading"
+                  >
+                    Tutup Semua
+                  </button>
+                </div>
+              </div>
+
+              <!-- Hasil Pencarian Info Banner -->
+              <div v-if="navSearchQuery" class="word-nav-search-status">
+                <span>Ditemukan <strong>{{ filteredHeadings.length }}</strong> hasil untuk "{{ navSearchQuery }}"</span>
+              </div>
+
+              <!-- Empty state: jika dokumen belum punya heading -->
+              <div v-if="!headingsList.length" class="word-nav-empty">
+                <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#94a3b8" stroke-width="1.8">
+                  <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                  <polyline points="14 2 14 8 20 8"></polyline>
+                  <line x1="16" y1="13" x2="8" y2="13"></line>
+                  <line x1="16" y1="17" x2="8" y2="17"></line>
+                </svg>
+                <p class="empty-nav-title">Belum ada heading</p>
+                <p class="empty-nav-desc">
+                  Gunakan tombol <strong>H1</strong>, <strong>H2</strong>, atau <strong>H3</strong> pada toolbar di atas untuk memberi judul bagian naskah.
+                </p>
+              </div>
+
+              <!-- Empty search: jika kata kunci pencarian tidak ditemukan -->
+              <div v-else-if="!filteredHeadings.length" class="word-nav-empty">
+                <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#94a3b8" stroke-width="1.8">
+                  <circle cx="11" cy="11" r="8"></circle>
+                  <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                </svg>
+                <p class="empty-nav-title">Tidak ditemukan</p>
+                <p class="empty-nav-desc">Tidak ada heading yang cocok dengan "{{ navSearchQuery }}"</p>
+                <button type="button" class="btn-clear-search-sm" @click="navSearchQuery = ''">
+                  Reset Pencarian
+                </button>
+              </div>
+
+              <!-- Daftar Heading Tree List (Sesuai Hirarki H1, H2, H3 seperti di Word) -->
+              <div v-else class="word-heading-list" role="tree">
+                <div
+                  v-for="item in filteredHeadings"
+                  :key="item.id"
+                  class="word-heading-item"
+                  :class="[
+                    'level-' + item.level,
+                    { 'active-heading': activeHeadingId === item.id }
+                  ]"
+                  :data-nav-id="item.id"
+                  @click="scrollToHeading(item)"
+                  :title="item.text"
+                  role="treeitem"
+                >
+                  <!-- Caret Expand / Collapse jika punya anak -->
+                  <button
+                    v-if="item.hasChildren && !navSearchQuery"
+                    type="button"
+                    class="btn-heading-caret"
+                    :class="{ collapsed: collapsedHeadings.has(item.id) }"
+                    @click.stop="toggleCollapseHeading(item.id, $event)"
+                    :title="collapsedHeadings.has(item.id) ? 'Buka sub-heading' : 'Tutup sub-heading'"
+                    aria-label="Toggle sub-headings"
+                  >
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor">
+                      <polygon points="6 9 12 15 18 9"></polygon>
+                    </svg>
+                  </button>
+                  <span v-else class="caret-spacer"></span>
+
+                  <!-- Badge Level (H1/H2/H3) -->
+                  <span class="heading-tag" :class="'tag-h' + item.level">
+                    H{{ item.level }}
+                  </span>
+
+                  <!-- Teks Judul Heading -->
+                  <span class="heading-label">
+                    {{ item.text }}
+                  </span>
+
+                  <!-- Tombol Quick Copy Judul Section -->
+                  <button
+                    type="button"
+                    class="btn-copy-heading-text"
+                    @click.stop="copyHeadingText(item)"
+                    title="Salin teks judul ini"
+                  >
+                    <svg v-if="copiedHeadingId === item.id" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                      <polyline points="20 6 9 17 4 12"></polyline>
+                    </svg>
+                    <svg v-else width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                      <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                    </svg>
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <!-- TAB 2: RINGKASAN & STATISTIK DOKUMEN -->
+            <div v-else-if="navActiveTab === 'stats'" class="word-nav-content word-nav-stats">
+              <div class="stats-card-group">
+                <div class="stat-box">
+                  <span class="stat-num">{{ headingStats.total }}</span>
+                  <span class="stat-lbl">Total Headings</span>
+                </div>
+                <div class="stat-box">
+                  <span class="stat-num">{{ documentStats.wordCount }}</span>
+                  <span class="stat-lbl">Kata</span>
+                </div>
+              </div>
+
+              <div class="stats-breakdown">
+                <h5 class="breakdown-title">Distribusi Heading</h5>
+                <div class="breakdown-row">
+                  <span class="breakdown-badge tag-h1">H1 (Utama)</span>
+                  <span class="breakdown-val">{{ headingStats.h1Count }} judul</span>
+                </div>
+                <div class="breakdown-row">
+                  <span class="breakdown-badge tag-h2">H2 (Subjudul)</span>
+                  <span class="breakdown-val">{{ headingStats.h2Count }} judul</span>
+                </div>
+                <div class="breakdown-row">
+                  <span class="breakdown-badge tag-h3">H3 (Sub-bagian)</span>
+                  <span class="breakdown-val">{{ headingStats.h3Count }} judul</span>
+                </div>
+              </div>
+
+              <div class="stats-doc-info">
+                <h5 class="breakdown-title">Info Naskah</h5>
+                <div class="info-item-row">
+                  <span class="info-k">Karakter:</span>
+                  <span class="info-v">{{ documentStats.charCount }}</span>
+                </div>
+                <div class="info-item-row">
+                  <span class="info-k">Estimasi Baca:</span>
+                  <span class="info-v">~{{ documentStats.readTimeMinutes }} menit</span>
+                </div>
+                <div class="info-item-row">
+                  <span class="info-k">Format Asli:</span>
+                  <span class="info-v">{{ form.original_filename || 'Dokumen Word/Teks' }}</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- Footer Panel Navigasi -->
+            <div class="word-nav-footer">
+              <span class="nav-footer-hint">
+                Klik judul untuk melompat langsung ke bagian naskah.
+              </span>
+            </div>
+          </aside>
+
         </div>
       </div>
 
@@ -2622,6 +3158,55 @@ function formatDate(val) {
   cursor: not-allowed;
 }
 
+.toolbar-spacer {
+  flex: 1;
+}
+
+.toolbar-nav-toggle-group {
+  display: flex;
+  align-items: center;
+}
+
+.tb-btn-nav {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  background: #ffffff;
+  border: 1px solid #cbd5e1;
+  color: #334155;
+  border-radius: 6px;
+  font-weight: 700;
+  font-size: 0.8rem;
+  transition: all 0.15s ease;
+}
+
+.tb-btn-nav:hover {
+  background: #eff6ff;
+  border-color: #bfdbfe;
+  color: #2563eb;
+}
+
+.tb-btn-nav.active {
+  background: #2563eb;
+  color: #ffffff;
+  border-color: #2563eb;
+}
+
+.tb-nav-count-badge {
+  background: #eff6ff;
+  color: #1d4ed8;
+  font-size: 0.7rem;
+  font-weight: 700;
+  padding: 1px 6px;
+  border-radius: 8px;
+}
+
+.tb-btn-nav.active .tb-nav-count-badge {
+  background: rgba(255, 255, 255, 0.25);
+  color: #ffffff;
+}
+
 /* Lembar Kertas Dokumen */
 .doc-body-wrapper {
   background: #f8fafc;
@@ -2634,17 +3219,573 @@ function formatDate(val) {
   border-radius: 0 0 12px 12px;
 }
 
+.doc-editor-layout {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+  position: relative;
+  width: 100%;
+}
+
 .doc-paper-sheet {
+  flex: 1 1 0%;
+  min-width: 0;
   background: #ffffff;
-  padding: 28px 36px;
+  padding: 30px 38px;
   border-radius: 8px;
   border: 1px solid #cbd5e1;
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.04);
   font-size: 0.95rem;
   line-height: 1.7;
   color: #1e293b;
-  min-height: 380px;
+  min-height: 480px;
   cursor: text;
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   PANEL NAVIGASI HEADING PERSIS MICROSOFT WORD (DI SEBELAH KANAN)
+   ══════════════════════════════════════════════════════════════════════════ */
+.word-nav-pane {
+  width: 310px;
+  flex-shrink: 0;
+  position: sticky;
+  top: 16px;
+  max-height: calc(100vh - 90px);
+  display: flex;
+  flex-direction: column;
+  background: #ffffff;
+  border: 1px solid #cbd5e1;
+  border-radius: 10px;
+  box-shadow: 0 4px 16px rgba(15, 23, 42, 0.06);
+  overflow: hidden;
+  transition: all 0.2s ease;
+  user-select: none;
+}
+
+.word-nav-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  background: #f8fafc;
+  border-bottom: 1px solid #e2e8f0;
+}
+
+.word-nav-title-wrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #1e293b;
+  font-weight: 700;
+  font-size: 0.88rem;
+}
+
+.word-nav-icon {
+  color: #2563eb;
+}
+
+.word-nav-badge {
+  background: #eff6ff;
+  color: #1d4ed8;
+  font-size: 0.72rem;
+  font-weight: 700;
+  padding: 1px 7px;
+  border-radius: 10px;
+  border: 1px solid #dbeafe;
+}
+
+.btn-word-nav-close {
+  background: transparent;
+  border: none;
+  color: #64748b;
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.12s ease;
+}
+
+.btn-word-nav-close:hover {
+  background: #e2e8f0;
+  color: #0f172a;
+}
+
+/* Search Box ala MS Word */
+.word-nav-search-wrap {
+  position: relative;
+  padding: 8px 12px;
+  background: #ffffff;
+  border-bottom: 1px solid #f1f5f9;
+  display: flex;
+  align-items: center;
+}
+
+.word-search-icon {
+  position: absolute;
+  left: 20px;
+  color: #94a3b8;
+  pointer-events: none;
+}
+
+.word-search-input {
+  width: 100%;
+  padding: 6px 28px 6px 30px;
+  font-size: 0.82rem;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  outline: none;
+  background: #f8fafc;
+  color: #1e293b;
+  transition: all 0.15s ease;
+}
+
+.word-search-input:focus {
+  background: #ffffff;
+  border-color: #2563eb;
+  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.1);
+}
+
+.btn-word-search-clear {
+  position: absolute;
+  right: 18px;
+  background: transparent;
+  border: none;
+  color: #94a3b8;
+  cursor: pointer;
+  padding: 2px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.btn-word-search-clear:hover {
+  color: #334155;
+}
+
+/* Tabs ala MS Word (Headings / Ringkasan) */
+.word-nav-tabs {
+  display: flex;
+  background: #f1f5f9;
+  border-bottom: 1px solid #e2e8f0;
+  padding: 2px 4px 0;
+  gap: 4px;
+}
+
+.word-tab-btn {
+  flex: 1;
+  padding: 7px 10px;
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: #64748b;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  transition: all 0.12s ease;
+}
+
+.word-tab-btn:hover {
+  color: #1e293b;
+}
+
+.word-tab-btn.active {
+  color: #2563eb;
+  font-weight: 700;
+  border-bottom-color: #2563eb;
+  background: #ffffff;
+  border-radius: 6px 6px 0 0;
+}
+
+.tab-count-pill {
+  font-size: 0.7rem;
+  background: #e2e8f0;
+  color: #475569;
+  padding: 1px 6px;
+  border-radius: 8px;
+}
+
+.word-tab-btn.active .tab-count-pill {
+  background: #eff6ff;
+  color: #1d4ed8;
+}
+
+/* Kontainer List Heading */
+.word-nav-content {
+  flex: 1;
+  overflow-y: auto;
+  max-height: calc(100vh - 240px);
+  min-height: 240px;
+  padding: 6px 0;
+}
+
+.word-nav-content::-webkit-scrollbar {
+  width: 5px;
+}
+.word-nav-content::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 4px;
+}
+.word-nav-content::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
+}
+
+.word-nav-controls {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 12px 6px;
+  font-size: 0.72rem;
+  border-bottom: 1px solid #f1f5f9;
+  margin-bottom: 4px;
+}
+
+.controls-label {
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: #94a3b8;
+}
+
+.controls-btns {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.btn-ctrl-action {
+  background: transparent;
+  border: none;
+  color: #2563eb;
+  font-size: 0.72rem;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 1px 4px;
+  border-radius: 4px;
+}
+
+.btn-ctrl-action:hover {
+  text-decoration: underline;
+}
+
+.ctrl-sep {
+  color: #cbd5e1;
+  font-size: 0.7rem;
+}
+
+.word-nav-search-status {
+  padding: 6px 12px;
+  background: #f8fafc;
+  font-size: 0.75rem;
+  color: #64748b;
+  border-bottom: 1px solid #f1f5f9;
+}
+
+.word-heading-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.word-heading-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  cursor: pointer;
+  user-select: none;
+  transition: background 0.1s ease, color 0.1s ease;
+  border-left: 3px solid transparent;
+}
+
+.word-heading-item:hover {
+  background: #f1f5f9;
+}
+
+.word-heading-item.active-heading {
+  background: #eff6ff;
+  border-left-color: #2563eb;
+}
+
+.word-heading-item.active-heading .heading-label {
+  color: #1d4ed8;
+  font-weight: 700;
+}
+
+/* Indentasi Hirarki Persis MS Word */
+.word-heading-item.level-1 {
+  padding-left: 8px;
+}
+.word-heading-item.level-1 .heading-label {
+  font-weight: 700;
+  color: #0f172a;
+  font-size: 0.83rem;
+}
+
+.word-heading-item.level-2 {
+  padding-left: 20px;
+}
+.word-heading-item.level-2 .heading-label {
+  font-weight: 500;
+  color: #334155;
+  font-size: 0.79rem;
+}
+
+.word-heading-item.level-3 {
+  padding-left: 32px;
+}
+.word-heading-item.level-3 .heading-label {
+  font-weight: 400;
+  color: #64748b;
+  font-size: 0.76rem;
+}
+
+.word-heading-item.level-4 {
+  padding-left: 42px;
+}
+.word-heading-item.level-4 .heading-label {
+  font-weight: 400;
+  color: #94a3b8;
+  font-size: 0.74rem;
+}
+
+.btn-heading-caret {
+  background: transparent;
+  border: none;
+  color: #64748b;
+  cursor: pointer;
+  padding: 2px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 3px;
+  transition: transform 0.15s ease;
+  flex-shrink: 0;
+}
+
+.btn-heading-caret:hover {
+  background: #cbd5e1;
+  color: #0f172a;
+}
+
+.btn-heading-caret.collapsed {
+  transform: rotate(-90deg);
+}
+
+.caret-spacer {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+}
+
+.heading-tag {
+  font-size: 0.65rem;
+  font-weight: 700;
+  padding: 1px 4px;
+  border-radius: 4px;
+  letter-spacing: 0.02em;
+  flex-shrink: 0;
+}
+
+.tag-h1 {
+  background: #eff6ff;
+  color: #2563eb;
+  border: 1px solid #bfdbfe;
+}
+
+.tag-h2 {
+  background: #f1f5f9;
+  color: #475569;
+  border: 1px solid #e2e8f0;
+}
+
+.tag-h3, .tag-h4 {
+  background: #faf5ff;
+  color: #7e22ce;
+  border: 1px solid #f3e8ff;
+}
+
+.heading-label {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  line-height: 1.4;
+}
+
+.btn-copy-heading-text {
+  opacity: 0;
+  background: transparent;
+  border: none;
+  color: #64748b;
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.12s ease;
+  flex-shrink: 0;
+}
+
+.word-heading-item:hover .btn-copy-heading-text {
+  opacity: 1;
+}
+
+.btn-copy-heading-text:hover {
+  background: #e2e8f0;
+  color: #1e293b;
+}
+
+.word-nav-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 30px 16px;
+  text-align: center;
+  gap: 6px;
+}
+
+.empty-nav-title {
+  margin: 6px 0 0;
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: #475569;
+}
+
+.empty-nav-desc {
+  margin: 0;
+  font-size: 0.76rem;
+  color: #64748b;
+  line-height: 1.45;
+}
+
+.btn-clear-search-sm {
+  margin-top: 8px;
+  padding: 4px 10px;
+  background: #eff6ff;
+  color: #2563eb;
+  border: 1px solid #bfdbfe;
+  border-radius: 6px;
+  font-size: 0.74rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+/* Stats Tab Styling */
+.word-nav-stats {
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.stats-card-group {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.stat-box {
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+}
+
+.stat-num {
+  font-size: 1.25rem;
+  font-weight: 800;
+  color: #2563eb;
+  line-height: 1.2;
+}
+
+.stat-lbl {
+  font-size: 0.7rem;
+  color: #64748b;
+  font-weight: 600;
+  margin-top: 2px;
+}
+
+.stats-breakdown, .stats-doc-info {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.breakdown-title {
+  margin: 0 0 2px;
+  font-size: 0.76rem;
+  font-weight: 700;
+  color: #334155;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.breakdown-row, .info-item-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 0.78rem;
+  padding: 4px 6px;
+  background: #f8fafc;
+  border-radius: 6px;
+}
+
+.breakdown-badge {
+  font-size: 0.7rem;
+  font-weight: 700;
+  padding: 1px 6px;
+  border-radius: 4px;
+}
+
+.breakdown-val, .info-v {
+  font-weight: 600;
+  color: #1e293b;
+}
+
+.info-k {
+  color: #64748b;
+}
+
+.word-nav-footer {
+  padding: 8px 12px;
+  background: #f8fafc;
+  border-top: 1px solid #e2e8f0;
+  font-size: 0.72rem;
+  color: #94a3b8;
+  text-align: center;
+}
+
+/* Efek Kilau Highlight saat Melompat ke Heading */
+:deep(.heading-jump-highlight) {
+  animation: headingPulse 2.2s ease-out;
+  border-radius: 6px;
+}
+
+@keyframes headingPulse {
+  0% {
+    background-color: #fef08a;
+    box-shadow: 0 0 0 6px #fef08a;
+  }
+  30% {
+    background-color: #fef9c3;
+    box-shadow: 0 0 0 4px #fef9c3;
+  }
+  100% {
+    background-color: transparent;
+    box-shadow: 0 0 0 0 transparent;
+  }
 }
 
 .doc-paper-locked {
@@ -3085,6 +4226,27 @@ function formatDate(val) {
 
   .doc-footer-bar .btn-cancel {
     height: 40px;
+  }
+
+  /* Responsive Heading Navigation Panel pada Mobile */
+  .doc-editor-layout {
+    flex-direction: column;
+  }
+
+  .word-nav-pane {
+    position: fixed;
+    top: 60px;
+    right: 10px;
+    bottom: 80px;
+    width: min(320px, calc(100vw - 20px));
+    max-height: none;
+    z-index: 1050;
+    box-shadow: 0 10px 30px rgba(15, 23, 42, 0.25);
+    border-radius: 12px;
+  }
+
+  .tb-btn-nav-text {
+    display: none;
   }
 }
 </style>
