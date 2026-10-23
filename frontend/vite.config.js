@@ -124,6 +124,36 @@ export default defineConfig(({ mode }) => {
           rewrite: (path) => path.replace(/^\/bmkg-proxy/, '')
         }
       }
+    },
+    build: {
+      chunkSizeWarningLimit: 1000,
+      rollupOptions: {
+        output: {
+          manualChunks(id) {
+            if (id.includes('node_modules')) {
+              if (id.includes('xlsx')) {
+                return 'vendor-xlsx';
+              }
+              if (id.includes('exceljs')) {
+                return 'vendor-exceljs';
+              }
+              if (id.includes('jszip')) {
+                return 'vendor-jszip';
+              }
+              if (id.includes('@tiptap') || id.includes('prosemirror')) {
+                return 'vendor-tiptap';
+              }
+              if (id.includes('mammoth')) {
+                return 'vendor-mammoth';
+              }
+              if (id.includes('vue') || id.includes('pinia') || id.includes('vue-router') || id.includes('axios')) {
+                return 'vendor-core';
+              }
+              return 'vendor-misc';
+            }
+          }
+        }
+      }
     }
   };
 });
