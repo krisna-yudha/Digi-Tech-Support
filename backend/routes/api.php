@@ -15,6 +15,7 @@ Route::get('/bmkg-time', [AuthController::class, 'getBmkgTime']);
 Route::middleware('auth:sanctum')->group(function () {
     Route::post('/logout', [AuthController::class, 'logout']);
     Route::get('/me', [AuthController::class, 'me']);
+    Route::get('/scrape-link-icon', [\App\Http\Controllers\Api\LinkScraperController::class, 'scrape']);
 
     Route::middleware('role:Agent,sanctum')->group(function () {
         Route::get('/agent/dashboard', [AuthController::class, 'agentDashboard']);

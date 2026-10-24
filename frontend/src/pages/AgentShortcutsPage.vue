@@ -1,6 +1,7 @@
 <script setup>
 import { ref, computed, onMounted, watch } from 'vue';
 import { useAuthStore } from '../stores/auth';
+import { scrapeLinkMetadata, getGoogleFavicon, extractDomain, normalizeUrl } from '../utils/linkIconHelper';
 
 const auth = useAuthStore();
 
@@ -27,7 +28,12 @@ const formName = ref('');
 const formUrl = ref('');
 const formCategory = ref('Eskalasi');
 const formDescription = ref('');
+const formIconUrl = ref('');
+const isScrapingIcon = ref(false);
 const formError = ref('');
+
+// State tracking icon gambar yang gagal dimuat (fallback ke SVG kategori)
+const failedIcons = ref({});
 
 // Copy tooltip state
 const copiedId = ref(null);
@@ -84,22 +90,40 @@ onMounted(() => {
   loadShortcuts();
 });
 
-// Format URL
-function normalizeUrl(input) {
-  let url = input.trim();
-  if (!/^https?:\/\//i.test(url)) {
-    url = 'https://' + url;
+// Live Icon Scraping debounced
+let scrapeTimeout = null;
+async function triggerIconScrape(immediate = false) {
+  if (scrapeTimeout) clearTimeout(scrapeTimeout);
+  const raw = formUrl.value.trim();
+  if (!raw || raw.length < 4) {
+    formIconUrl.value = '';
+    return;
   }
-  return url;
-}
 
-// Ekstrak domain untuk tampilan ringkas
-function extractDomain(url) {
-  try {
-    const parsed = new URL(url);
-    return parsed.hostname.replace(/^www\./, '');
-  } catch {
-    return url;
+  const runScrape = async () => {
+    isScrapingIcon.value = true;
+    try {
+      const meta = await scrapeLinkMetadata(formUrl.value);
+      if (meta?.iconUrl) {
+        formIconUrl.value = meta.iconUrl;
+      }
+      if (!formName.value && meta?.title) {
+        formName.value = meta.title;
+      }
+      if (meta?.categorySuggestion && formCategory.value === 'Eskalasi') {
+        formCategory.value = meta.categorySuggestion;
+      }
+    } catch (e) {
+      console.warn('Scraping icon error:', e);
+    } finally {
+      isScrapingIcon.value = false;
+    }
+  };
+
+  if (immediate) {
+    runScrape();
+  } else {
+    scrapeTimeout = setTimeout(runScrape, 400);
   }
 }
 
@@ -134,24 +158,30 @@ function getCategoryCount(catName) {
 
 // Buka Modal Tambah
 function openAddModal() {
+  if (scrapeTimeout) clearTimeout(scrapeTimeout);
   isEditing.value = false;
   currentEditingId.value = null;
   formName.value = '';
   formUrl.value = '';
   formCategory.value = 'Eskalasi';
   formDescription.value = '';
+  formIconUrl.value = '';
+  isScrapingIcon.value = false;
   formError.value = '';
   isModalOpen.value = true;
 }
 
 // Buka Modal Edit
 function openEditModal(item) {
+  if (scrapeTimeout) clearTimeout(scrapeTimeout);
   isEditing.value = true;
   currentEditingId.value = item.id;
   formName.value = item.name;
   formUrl.value = item.url;
   formCategory.value = item.category || 'Eskalasi';
   formDescription.value = item.description || '';
+  formIconUrl.value = item.iconUrl || getGoogleFavicon(item.url);
+  isScrapingIcon.value = false;
   formError.value = '';
   isModalOpen.value = true;
 }
@@ -181,6 +211,8 @@ function saveShortcut() {
     return;
   }
 
+  const iconToSave = formIconUrl.value || getGoogleFavicon(finalUrl);
+
   if (isEditing.value && currentEditingId.value) {
     const idx = shortcuts.value.findIndex(s => s.id === currentEditingId.value);
     if (idx !== -1) {
@@ -188,6 +220,7 @@ function saveShortcut() {
         ...shortcuts.value[idx],
         name,
         url: finalUrl,
+        iconUrl: iconToSave,
         category: formCategory.value,
         description: formDescription.value.trim(),
         updatedAt: new Date().toISOString()
@@ -198,6 +231,7 @@ function saveShortcut() {
       id: `sc-${Date.now()}`,
       name,
       url: finalUrl,
+      iconUrl: iconToSave,
       category: formCategory.value,
       description: formDescription.value.trim(),
       createdAt: new Date().toISOString()
@@ -222,6 +256,13 @@ function executeDelete() {
   }
   isDeleteModalOpen.value = false;
   shortcutToDelete.value = null;
+}
+
+// Buka Link Shortcut di Tab Baru
+function openShortcutUrl(url) {
+  if (!url) return;
+  const target = normalizeUrl(url);
+  window.open(target, '_blank', 'noopener,noreferrer');
 }
 
 // Salin Link ke Clipboard
@@ -325,9 +366,14 @@ async function copyLink(item) {
         v-for="item in filteredShortcuts"
         :key="item.id"
         class="shortcut-card"
+        @click="openShortcutUrl(item.url)"
+        role="button"
+        tabindex="0"
+        @keydown.enter="openShortcutUrl(item.url)"
+        :title="`Klik untuk membuka tautan ${item.name}`"
       >
         <!-- Card Top Bar: Category Pill & Menu Actions -->
-        <div class="card-top-bar">
+        <div class="card-top-bar" @click.stop>
           <span class="cat-pill" :class="'pill-' + (item.category || 'Lainnya').toLowerCase()">
             <!-- Category Icon -->
             <svg v-if="item.category === 'Eskalasi'" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
@@ -352,7 +398,7 @@ async function copyLink(item) {
             <svg v-else-if="item.category === 'Portal'" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
               <circle cx="12" cy="12" r="10"></circle>
               <line x1="2" y1="12" x2="22" y2="12"></line>
-              <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path>
+              <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1 4-10z"></path>
             </svg>
             <svg v-else width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
               <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path>
@@ -361,12 +407,12 @@ async function copyLink(item) {
             <span>{{ item.category || 'Lainnya' }}</span>
           </span>
 
-          <div class="card-edit-actions">
+          <div class="card-edit-actions" @click.stop>
             <!-- Tombol Edit -->
             <button
               type="button"
               class="btn-icon-action btn-icon-edit"
-              @click="openEditModal(item)"
+              @click.stop="openEditModal(item)"
               title="Edit nama dan link shortcut ini"
             >
               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
@@ -379,7 +425,7 @@ async function copyLink(item) {
             <button
               type="button"
               class="btn-icon-action btn-icon-delete"
-              @click="confirmDelete(item)"
+              @click.stop="confirmDelete(item)"
               title="Hapus shortcut ini"
             >
               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
@@ -390,30 +436,67 @@ async function copyLink(item) {
           </div>
         </div>
 
-        <!-- Card Main Title (Lega, Tidak Terpotong) -->
-        <h3 class="card-title" :title="item.name">{{ item.name }}</h3>
+        <!-- Card Main Identity (Icon Favicon Hasil Scraping & Judul) -->
+        <div class="card-identity-header">
+          <div class="card-favicon-bubble" :class="'avatar-' + (item.category || 'Lainnya').toLowerCase()">
+            <img
+              v-if="(item.iconUrl || getGoogleFavicon(item.url)) && !failedIcons[item.id]"
+              :src="item.iconUrl || getGoogleFavicon(item.url)"
+              class="card-favicon-img"
+              alt=""
+              @error="failedIcons[item.id] = true"
+            />
+            <!-- Fallback SVG icon -->
+            <svg v-else-if="item.category === 'Eskalasi'" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+              <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path>
+              <line x1="12" y1="9" x2="12" y2="13"></line>
+              <line x1="12" y1="17" x2="12.01" y2="17"></line>
+            </svg>
+            <svg v-else-if="item.category === 'Form'" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+              <polyline points="14 2 14 8 20 8"></polyline>
+              <line x1="16" y1="13" x2="8" y2="13"></line>
+              <line x1="16" y1="17" x2="8" y2="17"></line>
+            </svg>
+            <svg v-else-if="item.category === 'Spreadsheet'" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+              <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+              <line x1="3" y1="9" x2="21" y2="9"></line>
+              <line x1="9" y1="21" x2="9" y2="9"></line>
+            </svg>
+            <svg v-else-if="item.category === 'WhatsApp'" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+              <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"></path>
+            </svg>
+            <svg v-else-if="item.category === 'Portal'" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+              <circle cx="12" cy="12" r="10"></circle>
+              <line x1="2" y1="12" x2="22" y2="12"></line>
+              <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path>
+            </svg>
+            <svg v-else width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+              <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path>
+              <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path>
+            </svg>
+          </div>
+
+          <div class="card-titles-col">
+            <h3 class="card-title" :title="item.name">{{ item.name }}</h3>
+            <!-- Domain Tag -->
+            <div class="card-domain-row">
+              <span class="domain-text" :title="item.url">{{ extractDomain(item.url) }}</span>
+            </div>
+          </div>
+        </div>
 
         <!-- Description (Catatan Penggunaan) -->
         <p class="card-desc">
           {{ item.description || 'Tidak ada catatan tambahan untuk link ini.' }}
         </p>
 
-        <!-- Domain Tag -->
-        <div class="card-domain-row">
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <circle cx="12" cy="12" r="10"></circle>
-            <line x1="2" y1="12" x2="22" y2="12"></line>
-            <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path>
-          </svg>
-          <span class="domain-text" :title="item.url">{{ extractDomain(item.url) }}</span>
-        </div>
-
-        <!-- Card Bottom Buttons: Buka Link & Salin URL -->
-        <div class="card-footer-buttons">
+        <!-- Card Bottom Buttons: Salin URL & Indikator Klik Buka Link -->
+        <div class="card-footer-buttons" @click.stop>
           <button
             type="button"
             class="btn-card-copy"
-            @click="copyLink(item)"
+            @click.stop="copyLink(item)"
             :title="copiedId === item.id ? 'Tersalin ke clipboard!' : 'Salin tautan link'"
           >
             <svg v-if="copiedId === item.id" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#059669" stroke-width="2.5">
@@ -426,20 +509,14 @@ async function copyLink(item) {
             <span>{{ copiedId === item.id ? 'Tersalin!' : 'Salin' }}</span>
           </button>
 
-          <a
-            :href="item.url"
-            target="_blank"
-            rel="noopener noreferrer"
-            class="btn-card-open"
-            title="Buka link ini di tab baru"
-          >
-            <span>Buka Link</span>
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3">
+          <div class="card-click-hint">
+            <span>Buka link</span>
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
               <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path>
               <polyline points="15 3 21 3 21 9"></polyline>
               <line x1="10" y1="14" x2="21" y2="3"></line>
             </svg>
-          </a>
+          </div>
         </div>
       </div>
     </div>
@@ -532,7 +609,14 @@ async function copyLink(item) {
                 </label>
                 <div class="input-url-wrap">
                   <span class="url-prefix-icon">
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+                    <img
+                      v-if="formIconUrl"
+                      :src="formIconUrl"
+                      class="prefix-icon-img"
+                      alt=""
+                      @error="formIconUrl = ''"
+                    />
+                    <svg v-else width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
                       <circle cx="12" cy="12" r="10"></circle>
                       <line x1="2" y1="12" x2="22" y2="12"></line>
                       <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1 4-10z"></path>
@@ -544,9 +628,22 @@ async function copyLink(item) {
                     class="form-control form-control-url"
                     placeholder="https://forms.google.com/d/e/... atau portal.company.com"
                     required
+                    @input="triggerIconScrape(false)"
+                    @blur="triggerIconScrape(true)"
+                    @paste="setTimeout(() => triggerIconScrape(true), 50)"
                   />
                 </div>
-                <span class="form-hint">Otomatis ditambahkan https:// jika tidak ditulis.</span>
+
+                <!-- Live icon scraping status & preview -->
+                <div v-if="isScrapingIcon" class="icon-scrape-status scraping">
+                  <span class="scrape-spinner"></span>
+                  <span>Mendeteksi icon link...</span>
+                </div>
+                <div v-else-if="formIconUrl" class="icon-scrape-status detected">
+                  <img :src="formIconUrl" class="detected-icon-thumb" alt="" @error="formIconUrl = ''" />
+                  <span class="detected-text">Icon link berhasil dideteksi otomatis</span>
+                </div>
+                <span v-else class="form-hint">Icon website & favicon akan di-scrape otomatis begitu link diisi.</span>
               </div>
 
               <!-- Pilihan Kategori -->
@@ -847,7 +944,7 @@ async function copyLink(item) {
 
 .shortcut-card {
   background: #ffffff;
-  border: 1px solid #e2e8f0;
+  border: 1.5px solid #e2e8f0;
   border-radius: 16px;
   padding: 18px 20px;
   display: flex;
@@ -856,12 +953,19 @@ async function copyLink(item) {
   box-shadow: 0 3px 10px rgba(15, 23, 42, 0.03);
   transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease;
   position: relative;
+  cursor: pointer;
 }
 
 .shortcut-card:hover {
-  transform: translateY(-2px);
-  border-color: #cbd5e1;
-  box-shadow: 0 10px 24px -4px rgba(15, 23, 42, 0.08);
+  transform: translateY(-3px);
+  border-color: #93c5fd;
+  box-shadow: 0 12px 28px -4px rgba(37, 99, 235, 0.12), 0 4px 8px -2px rgba(15, 23, 42, 0.04);
+}
+
+.shortcut-card:focus-visible {
+  outline: none;
+  border-color: #2563eb;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.2);
 }
 
 .card-top-bar {
@@ -979,12 +1083,88 @@ async function copyLink(item) {
   box-shadow: 0 2px 6px rgba(220, 38, 38, 0.25);
 }
 
+.card-identity-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.card-favicon-bubble {
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  border: 1px solid transparent;
+  transition: transform 0.15s ease;
+}
+
+.shortcut-card:hover .card-favicon-bubble {
+  transform: scale(1.05);
+}
+
+.card-favicon-img {
+  width: 24px;
+  height: 24px;
+  object-fit: contain;
+  border-radius: 4px;
+}
+
+.avatar-eskalasi {
+  background: #fee2e2;
+  border-color: #fecaca;
+  color: #b91c1c;
+}
+
+.avatar-form {
+  background: #dbeafe;
+  border-color: #bfdbfe;
+  color: #1d4ed8;
+}
+
+.avatar-portal {
+  background: #e0e7ff;
+  border-color: #c7d2fe;
+  color: #4338ca;
+}
+
+.avatar-spreadsheet {
+  background: #d1fae5;
+  border-color: #a7f3d0;
+  color: #047857;
+}
+
+.avatar-whatsapp {
+  background: #dcfce7;
+  border-color: #bbf7d0;
+  color: #15803d;
+}
+
+.avatar-lainnya {
+  background: #f1f5f9;
+  border-color: #e2e8f0;
+  color: #475569;
+}
+
+.card-titles-col {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+
 .card-title {
-  font-size: 1.05rem;
+  font-size: 1.02rem;
   font-weight: 800;
   color: #0f172a;
   margin: 0;
   line-height: 1.3;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .card-desc {
@@ -1004,9 +1184,9 @@ async function copyLink(item) {
   display: flex;
   align-items: center;
   gap: 6px;
-  font-size: 0.75rem;
+  font-size: 0.74rem;
   color: #64748b;
-  padding: 4px 0;
+  padding: 1px 0;
 }
 
 .domain-text {
@@ -1020,6 +1200,7 @@ async function copyLink(item) {
 .card-footer-buttons {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 8px;
   margin-top: auto;
   padding-top: 10px;
@@ -1030,7 +1211,7 @@ async function copyLink(item) {
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  padding: 7px 12px;
+  padding: 6px 12px;
   border-radius: 8px;
   border: 1.5px solid #cbd5e1;
   background: #ffffff;
@@ -1042,31 +1223,25 @@ async function copyLink(item) {
 }
 
 .btn-card-copy:hover {
-  background: #f1f5f9;
-  color: #0f172a;
+  background: #eff6ff;
+  color: #1d4ed8;
+  border-color: #93c5fd;
 }
 
-.btn-card-open {
-  flex: 1;
+.card-click-hint {
   display: inline-flex;
   align-items: center;
-  justify-content: center;
-  gap: 6px;
-  padding: 8px 14px;
-  border-radius: 8px;
-  background: #eff6ff;
-  border: 1px solid #bfdbfe;
-  color: #1d4ed8;
-  font-size: 0.82rem;
-  font-weight: 700;
-  text-decoration: none;
+  gap: 4px;
+  font-size: 0.76rem;
+  font-weight: 600;
+  color: #94a3b8;
   transition: all 0.15s ease;
+  pointer-events: none;
 }
 
-.btn-card-open:hover {
-  background: #2563eb;
-  color: #ffffff;
-  border-color: #2563eb;
+.shortcut-card:hover .card-click-hint {
+  color: #2563eb;
+  transform: translateX(2px);
 }
 
 /* ─── Empty State ─── */
@@ -1285,6 +1460,56 @@ async function copyLink(item) {
 
 .form-control-url {
   padding-left: 36px;
+}
+
+.prefix-icon-img {
+  width: 16px;
+  height: 16px;
+  border-radius: 3px;
+  object-fit: contain;
+}
+
+.icon-scrape-status {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 0.76rem;
+  padding: 4px 8px;
+  border-radius: 6px;
+  margin-top: 2px;
+}
+
+.icon-scrape-status.scraping {
+  color: #2563eb;
+  background: #eff6ff;
+  border: 1px solid #dbeafe;
+}
+
+.icon-scrape-status.detected {
+  color: #047857;
+  background: #ecfdf5;
+  border: 1px solid #a7f3d0;
+  font-weight: 600;
+}
+
+.detected-icon-thumb {
+  width: 16px;
+  height: 16px;
+  border-radius: 3px;
+  object-fit: contain;
+}
+
+.scrape-spinner {
+  width: 12px;
+  height: 12px;
+  border: 2px solid #bfdbfe;
+  border-top-color: #2563eb;
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
 }
 
 .form-hint {

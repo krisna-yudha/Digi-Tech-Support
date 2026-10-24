@@ -1,6 +1,7 @@
 <script setup>
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue';
 import { useAuthStore } from '../stores/auth';
+import { scrapeLinkMetadata, getGoogleFavicon, extractDomain, normalizeUrl } from '../utils/linkIconHelper';
 
 const auth = useAuthStore();
 
@@ -18,7 +19,12 @@ const formName = ref('');
 const formUrl = ref('');
 const formCategory = ref('Eskalasi');
 const formDescription = ref('');
+const formIconUrl = ref('');
+const isScrapingIcon = ref(false);
 const formError = ref('');
+
+// State tracking icon gambar yang gagal dimuat (fallback ke SVG kategori)
+const failedIcons = ref({});
 
 // Search filter inside dropdown
 const searchQuery = ref('');
@@ -122,23 +128,54 @@ const filteredShortcuts = computed(() => {
   );
 });
 
-// Format URL agar selalu diawali https:// atau http://
-function normalizeUrl(input) {
-  let url = input.trim();
-  if (!/^https?:\/\//i.test(url)) {
-    url = 'https://' + url;
+// Live Icon Scraping debounced
+let scrapeTimeout = null;
+async function triggerIconScrape(immediate = false) {
+  if (scrapeTimeout) clearTimeout(scrapeTimeout);
+  const raw = formUrl.value.trim();
+  if (!raw || raw.length < 4) {
+    formIconUrl.value = '';
+    return;
   }
-  return url;
+
+  const runScrape = async () => {
+    isScrapingIcon.value = true;
+    try {
+      const meta = await scrapeLinkMetadata(formUrl.value);
+      if (meta?.iconUrl) {
+        formIconUrl.value = meta.iconUrl;
+      }
+      if (!formName.value && meta?.title) {
+        formName.value = meta.title;
+      }
+      if (meta?.categorySuggestion && formCategory.value === 'Eskalasi') {
+        formCategory.value = meta.categorySuggestion;
+      }
+    } catch (e) {
+      console.warn('Scraping icon error:', e);
+    } finally {
+      isScrapingIcon.value = false;
+    }
+  };
+
+  if (immediate) {
+    runScrape();
+  } else {
+    scrapeTimeout = setTimeout(runScrape, 400);
+  }
 }
 
 // Buka modal Tambah
 function openAddModal() {
+  if (scrapeTimeout) clearTimeout(scrapeTimeout);
   isEditing.value = false;
   currentEditingId.value = null;
   formName.value = '';
   formUrl.value = '';
   formCategory.value = 'Eskalasi';
   formDescription.value = '';
+  formIconUrl.value = '';
+  isScrapingIcon.value = false;
   formError.value = '';
   isModalOpen.value = true;
 }
@@ -146,12 +183,15 @@ function openAddModal() {
 // Buka modal Edit
 function openEditModal(shortcut, event) {
   if (event) event.stopPropagation();
+  if (scrapeTimeout) clearTimeout(scrapeTimeout);
   isEditing.value = true;
   currentEditingId.value = shortcut.id;
   formName.value = shortcut.name;
   formUrl.value = shortcut.url;
   formCategory.value = shortcut.category || 'Eskalasi';
   formDescription.value = shortcut.description || '';
+  formIconUrl.value = shortcut.iconUrl || getGoogleFavicon(shortcut.url);
+  isScrapingIcon.value = false;
   formError.value = '';
   isModalOpen.value = true;
 }
@@ -183,6 +223,8 @@ function saveShortcut() {
     return;
   }
 
+  const iconToSave = formIconUrl.value || getGoogleFavicon(finalUrl);
+
   if (isEditing.value && currentEditingId.value) {
     // Mode Update
     const idx = shortcuts.value.findIndex(s => s.id === currentEditingId.value);
@@ -191,6 +233,7 @@ function saveShortcut() {
         ...shortcuts.value[idx],
         name,
         url: finalUrl,
+        iconUrl: iconToSave,
         category: formCategory.value,
         description: formDescription.value.trim(),
         updatedAt: new Date().toISOString()
@@ -202,6 +245,7 @@ function saveShortcut() {
       id: `sc-${Date.now()}`,
       name,
       url: finalUrl,
+      iconUrl: iconToSave,
       category: formCategory.value,
       description: formDescription.value.trim(),
       createdAt: new Date().toISOString()
@@ -213,22 +257,63 @@ function saveShortcut() {
   closeModal();
 }
 
+// State Konfirmasi Kustom (Menggantikan window.confirm)
+const confirmDialog = ref({
+  isOpen: false,
+  title: 'Konfirmasi',
+  message: '',
+  confirmText: 'Ya, Hapus',
+  cancelText: 'Batal',
+  onConfirm: null
+});
+
+function openConfirmDialog(opts) {
+  confirmDialog.value = {
+    isOpen: true,
+    title: opts.title || 'Konfirmasi',
+    message: opts.message || '',
+    confirmText: opts.confirmText || 'Ya, Lanjutkan',
+    cancelText: opts.cancelText || 'Batal',
+    onConfirm: opts.onConfirm || null
+  };
+}
+
+function handleConfirmDialog() {
+  const cb = confirmDialog.value.onConfirm;
+  confirmDialog.value.isOpen = false;
+  confirmDialog.value.onConfirm = null;
+  if (typeof cb === 'function') {
+    cb();
+  }
+}
+
 // Hapus shortcut
 function deleteShortcut(shortcut, event) {
   if (event) event.stopPropagation();
-  const confirmDelete = window.confirm(`Apakah Anda yakin ingin menghapus shortcut "${shortcut.name}"?`);
-  if (!confirmDelete) return;
-
-  shortcuts.value = shortcuts.value.filter(s => s.id !== shortcut.id);
-  saveShortcuts();
+  openConfirmDialog({
+    title: 'Hapus Shortcut?',
+    message: `Apakah Anda yakin ingin menghapus tautan shortcut "${shortcut.name}"?`,
+    confirmText: 'Ya, Hapus',
+    cancelText: 'Batal',
+    onConfirm: () => {
+      shortcuts.value = shortcuts.value.filter(s => s.id !== shortcut.id);
+      saveShortcuts();
+    }
+  });
 }
 
 // Reset ke preset default
 function resetToDefaults() {
-  const confirmReset = window.confirm('Reset daftar shortcut kembali ke link contoh bawaan?');
-  if (!confirmReset) return;
-  shortcuts.value = [...defaultShortcuts];
-  saveShortcuts();
+  openConfirmDialog({
+    title: 'Reset ke Bawaan?',
+    message: 'Reset daftar shortcut kembali ke link contoh bawaan?',
+    confirmText: 'Ya, Reset',
+    cancelText: 'Batal',
+    onConfirm: () => {
+      shortcuts.value = [...defaultShortcuts];
+      saveShortcuts();
+    }
+  });
 }
 
 // Buka link di tab baru
@@ -333,10 +418,17 @@ function extractDomain(url) {
               @click="openShortcut(item.url, $event)"
               :title="`Klik untuk buka ${item.name} (${item.url})`"
             >
-              <!-- Icon Kategori -->
+              <!-- Icon Kategori atau Favicon Scraped -->
               <div class="shortcut-icon-badge" :class="'cat-' + (item.category || 'Lainnya').toLowerCase()">
+                <img
+                  v-if="(item.iconUrl || getGoogleFavicon(item.url)) && !failedIcons[item.id]"
+                  :src="item.iconUrl || getGoogleFavicon(item.url)"
+                  class="shortcut-favicon-img"
+                  alt=""
+                  @error="failedIcons[item.id] = true"
+                />
                 <!-- Eskalasi Icon -->
-                <svg v-if="item.category === 'Eskalasi'" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+                <svg v-else-if="item.category === 'Eskalasi'" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
                   <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path>
                   <line x1="12" y1="9" x2="12" y2="13"></line>
                   <line x1="12" y1="17" x2="12.01" y2="17"></line>
@@ -517,7 +609,14 @@ function extractDomain(url) {
                 </label>
                 <div class="input-url-wrap">
                   <span class="url-prefix-icon">
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+                    <img
+                      v-if="formIconUrl"
+                      :src="formIconUrl"
+                      class="prefix-icon-img"
+                      alt=""
+                      @error="formIconUrl = ''"
+                    />
+                    <svg v-else width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
                       <circle cx="12" cy="12" r="10"></circle>
                       <line x1="2" y1="12" x2="22" y2="12"></line>
                       <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1 4-10z"></path>
@@ -529,9 +628,22 @@ function extractDomain(url) {
                     class="form-control form-control-url"
                     placeholder="https://forms.google.com/d/e/... atau portal.company.com"
                     required
+                    @input="triggerIconScrape(false)"
+                    @blur="triggerIconScrape(true)"
+                    @paste="setTimeout(() => triggerIconScrape(true), 50)"
                   />
                 </div>
-                <span class="form-hint">Otomatis ditambahkan https:// jika tidak ditulis.</span>
+
+                <!-- Live icon scraping status & preview -->
+                <div v-if="isScrapingIcon" class="icon-scrape-status scraping">
+                  <span class="scrape-spinner"></span>
+                  <span>Mendeteksi icon link...</span>
+                </div>
+                <div v-else-if="formIconUrl" class="icon-scrape-status detected">
+                  <img :src="formIconUrl" class="detected-icon-thumb" alt="" @error="formIconUrl = ''" />
+                  <span class="detected-text">Icon link berhasil dideteksi otomatis</span>
+                </div>
+                <span v-else class="form-hint">Icon website & favicon akan di-scrape otomatis begitu link diisi.</span>
               </div>
 
               <!-- Pilihan Kategori -->
@@ -575,6 +687,37 @@ function extractDomain(url) {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      </transition>
+    </Teleport>
+
+    <!-- Modal Konfirmasi Kustom (Tanpa Source Link Browser) -->
+    <Teleport to="body">
+      <transition name="modal-fade">
+        <div v-if="confirmDialog.isOpen" class="shortcut-modal-overlay" @click.self="confirmDialog.isOpen = false">
+          <div class="shortcut-modal-card modal-card-sm" role="dialog" aria-modal="true">
+            <div class="delete-modal-inner">
+              <div class="delete-icon-bubble">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#dc2626" stroke-width="2.2">
+                  <circle cx="12" cy="12" r="10"></circle>
+                  <line x1="15" y1="9" x2="9" y2="15"></line>
+                  <line x1="9" y1="9" x2="15" y2="15"></line>
+                </svg>
+              </div>
+
+              <h3 class="delete-modal-title">{{ confirmDialog.title }}</h3>
+              <p class="delete-modal-desc">{{ confirmDialog.message }}</p>
+
+              <div class="delete-modal-actions">
+                <button type="button" class="btn-cancel" @click="confirmDialog.isOpen = false">
+                  {{ confirmDialog.cancelText }}
+                </button>
+                <button type="button" class="btn-danger-delete" @click="handleConfirmDialog">
+                  {{ confirmDialog.confirmText }}
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       </transition>
@@ -786,6 +929,13 @@ function extractDomain(url) {
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
+}
+
+.shortcut-favicon-img {
+  width: 20px;
+  height: 20px;
+  object-fit: contain;
+  border-radius: 4px;
 }
 
 /* Kategori Colors */
@@ -1219,6 +1369,56 @@ function extractDomain(url) {
   padding-left: 36px;
 }
 
+.prefix-icon-img {
+  width: 16px;
+  height: 16px;
+  border-radius: 3px;
+  object-fit: contain;
+}
+
+.icon-scrape-status {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 0.76rem;
+  padding: 4px 8px;
+  border-radius: 6px;
+  margin-top: 2px;
+}
+
+.icon-scrape-status.scraping {
+  color: #2563eb;
+  background: #eff6ff;
+  border: 1px solid #dbeafe;
+}
+
+.icon-scrape-status.detected {
+  color: #047857;
+  background: #ecfdf5;
+  border: 1px solid #a7f3d0;
+  font-weight: 600;
+}
+
+.detected-icon-thumb {
+  width: 16px;
+  height: 16px;
+  border-radius: 3px;
+  object-fit: contain;
+}
+
+.scrape-spinner {
+  width: 12px;
+  height: 12px;
+  border: 2px solid #bfdbfe;
+  border-top-color: #2563eb;
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
 .form-hint {
   font-size: 0.72rem;
   color: #94a3b8;
@@ -1308,5 +1508,73 @@ function extractDomain(url) {
 .modal-fade-enter-from,
 .modal-fade-leave-to {
   opacity: 0;
+}
+
+/* Delete Modal Styles */
+.modal-card-sm {
+  max-width: 420px;
+}
+
+.delete-modal-inner {
+  padding: 24px;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+}
+
+.delete-icon-bubble {
+  width: 48px;
+  height: 48px;
+  border-radius: 12px;
+  background: #fef2f2;
+  border: 1px solid #fee2e2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.delete-modal-title {
+  font-size: 1.1rem;
+  font-weight: 800;
+  color: #0f172a;
+  margin: 0;
+}
+
+.delete-modal-desc {
+  font-size: 0.84rem;
+  color: #64748b;
+  margin: 0;
+  line-height: 1.45;
+}
+
+.delete-modal-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  margin-top: 10px;
+}
+
+.delete-modal-actions .btn-cancel {
+  flex: 1;
+}
+
+.btn-danger-delete {
+  flex: 1;
+  padding: 9px 16px;
+  border-radius: 10px;
+  background: #dc2626;
+  border: none;
+  color: #ffffff;
+  font-size: 0.82rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.btn-danger-delete:hover {
+  background: #b91c1c;
 }
 </style>

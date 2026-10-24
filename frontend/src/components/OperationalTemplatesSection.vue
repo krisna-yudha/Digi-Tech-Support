@@ -358,8 +358,75 @@ const selectedCategory = ref('Semua');
 const fileInput = ref(null);
 const fileProcessing = ref(false);
 const uploadError = ref('');
-
 const uploadSuccess = ref('');
+
+// ── Modal Konfirmasi Kustom (Menggantikan confirm/window.confirm agar tidak menampilkan header URL browser '127.0.0.1:5173 says') ──
+const confirmModal = ref({
+  isOpen: false,
+  title: 'Konfirmasi Tindakan',
+  message: '',
+  confirmText: 'Ya, Hapus',
+  cancelText: 'Batal',
+  type: 'danger', // 'danger' | 'warning'
+  onConfirm: null
+});
+
+function openConfirmModal({ title, message, confirmText = 'Ya, Hapus', cancelText = 'Batal', type = 'danger', onConfirm }) {
+  confirmModal.value = {
+    isOpen: true,
+    title,
+    message,
+    confirmText,
+    cancelText,
+    type,
+    onConfirm
+  };
+}
+
+function handleConfirmAction() {
+  const cb = confirmModal.value.onConfirm;
+  confirmModal.value.isOpen = false;
+  confirmModal.value.onConfirm = null;
+  if (typeof cb === 'function') {
+    cb();
+  }
+}
+
+function handleCancelConfirm() {
+  confirmModal.value.isOpen = false;
+  confirmModal.value.onConfirm = null;
+}
+
+// ── Floating Popup Toast Notifikasi Kustom (Pengganti banner / alert bawaan browser tanpa source link) ──
+const toastPopup = ref({
+  isOpen: false,
+  type: 'success', // 'success' | 'error' | 'info'
+  title: 'Berhasil',
+  message: '',
+  timeoutId: null
+});
+
+function showPopupToast({ type = 'success', title = 'Berhasil', message = '' }) {
+  if (toastPopup.value.timeoutId) {
+    clearTimeout(toastPopup.value.timeoutId);
+  }
+  toastPopup.value = {
+    isOpen: true,
+    type,
+    title,
+    message,
+    timeoutId: setTimeout(() => {
+      toastPopup.value.isOpen = false;
+    }, 4500)
+  };
+}
+
+function closePopupToast() {
+  if (toastPopup.value.timeoutId) {
+    clearTimeout(toastPopup.value.timeoutId);
+  }
+  toastPopup.value.isOpen = false;
+}
 
 // State data dokumen aktif (langsung diedit & disalin)
 const form = ref({
@@ -554,6 +621,135 @@ const formCategories = [
   'SOP'
 ];
 
+/**
+ * Membersihkan kerapatan spasi & baris teks template agar tidak renggang saat di-copy paste ke Live Chat / WA / Tiket.
+ * - Mengelompokkan item/field formulir yang berurutan (misal: "Nama terdaftar:", "Detail pelaporan:") dengan single newline (\n).
+ * - Menjaga jeda antar paragraf narasi / salam pembuka / penutup dengan single blank line (\n\n).
+ * - Menghilangkan baris kosong berlebih (> 2 newline).
+ */
+function cleanTemplateSpacing(text) {
+  if (!text || typeof text !== 'string') return '';
+
+  // 1. Normalisasi line endings & trim trailing whitespace pada setiap baris
+  const normalized = text
+    .replace(/\r\n/g, '\n')
+    .replace(/\r/g, '\n')
+    .replace(/[ \t]+$/gm, '')
+    .trim();
+
+  if (!normalized) return '';
+
+  // 2. Pecah per baris
+  const rawLines = normalized.split('\n');
+  const resultLines = [];
+
+  // Helper: Deteksi apakah baris adalah field item, bullet, atau label formulir
+  const isFieldOrListItem = (line) => {
+    if (!line) return false;
+    const trimmed = line.trim();
+    if (!trimmed) return false;
+
+    // Bullet / numbering (misal: - item, * item, 1. item, a. item)
+    if (/^[-*•–—]\s+/.test(trimmed) || /^\d+[.)]\s+/.test(trimmed) || /^[a-zA-Z][.)]\s+/.test(trimmed)) {
+      return true;
+    }
+
+    // Label yang diakhiri tanda titik dua (misal: "Nama terdaftar:", "Foto modem tampak depan dan belakang terlihat kode SN:")
+    if (/:[- ]*$/.test(trimmed)) {
+      return true;
+    }
+
+    // Label dengan format "Field : value" atau "Field:" di awal baris pendek (< 90 karakter)
+    if (/^[A-Za-z0-9\s()\/_-]{2,35}\s*:\s*/.test(trimmed) && trimmed.length < 90) {
+      return true;
+    }
+
+    // Baris penutup salam (misal: "Salam hangat,", "Hormat kami,")
+    if (/^(salam hangat|hormat kami|terima kasih|best regards|regards)[,.]?$/i.test(trimmed)) {
+      return true;
+    }
+
+    return false;
+  };
+
+  // Helper: Deteksi apakah baris adalah pengantar list (misal: "...sebagai berikut:", "...data berikut:")
+  const isListIntroducer = (line) => {
+    if (!line) return false;
+    const trimmed = line.trim();
+    return /:\s*$/.test(trimmed) && trimmed.length > 20;
+  };
+
+  let wasPrevEmpty = false;
+
+  for (let i = 0; i < rawLines.length; i++) {
+    const line = rawLines[i].trim();
+
+    if (!line) {
+      wasPrevEmpty = true;
+      continue;
+    }
+
+    if (resultLines.length === 0) {
+      resultLines.push(line);
+      wasPrevEmpty = false;
+      continue;
+    }
+
+    const prevLine = resultLines[resultLines.length - 1];
+
+    // Tentukan apakah antara prevLine dan line saat ini perlu blank line (empty line)
+    let shouldHaveBlankLine = wasPrevEmpty;
+
+    // KONDISI KHUSUS PERBAIKAN SPACING:
+    // 1. Jika prevLine adalah pengantar list ("...data sebagai berikut:"), baris pertama list TIDAK boleh diberi jeda kosong!
+    if (isListIntroducer(prevLine) && isFieldOrListItem(line)) {
+      shouldHaveBlankLine = false;
+    }
+    // 2. Jika prevLine dan line saat ini sama-sama field item / list item (misal: "Nama terdaftar:" dan "Detail pelaporan:"),
+    //    jangan beri blank line agar rapat dan rapi seperti template aslinya!
+    else if (isFieldOrListItem(prevLine) && isFieldOrListItem(line)) {
+      shouldHaveBlankLine = false;
+    }
+    // 3. Jika baris ini adalah salam penutup atau instansi (misal: "Customer Care ICONNET" setelah "Salam hangat,")
+    else if (/^(salam hangat|hormat kami)[,.]?$/i.test(prevLine)) {
+      shouldHaveBlankLine = false;
+    }
+
+    if (shouldHaveBlankLine) {
+      resultLines.push(''); // Sisipkan 1 baris kosong antar paragraf
+    }
+
+    resultLines.push(line);
+    wasPrevEmpty = false;
+  }
+
+  return resultLines.join('\n');
+}
+
+// Helper untuk menyalin isi teks murni template ke clipboard dengan spacing bersih
+function extractPlainText(html) {
+  if (!html) return '';
+
+  const temp = document.createElement('div');
+  temp.innerHTML = html;
+
+  // Ganti <br> dengan newline
+  temp.querySelectorAll('br').forEach(br => br.replaceWith('\n'));
+
+  // Beri newline pada elemen blok
+  const blockSelectors = 'p, h1, h2, h3, h4, h5, h6, li, tr, blockquote';
+  temp.querySelectorAll(blockSelectors).forEach(el => {
+    if (!el.textContent.trim()) {
+      el.replaceWith('\n');
+    } else {
+      el.append('\n');
+    }
+  });
+
+  const rawText = temp.textContent || temp.innerText || '';
+  return cleanTemplateSpacing(rawText);
+}
+
 // Inisialisasi Tiptap Editor langsung di halaman
 const editor = useEditor({
   content: '<p></p>',
@@ -561,6 +757,15 @@ const editor = useEditor({
   editorProps: {
     attributes: {
       class: 'tiptap-editor-body'
+    },
+    // Pastikan saat agent copy text (Ctrl+C) dari dalam editor, spacing naskah rapat & rapi
+    clipboardTextSerializer: (slice) => {
+      try {
+        const raw = slice.content.textBetween(0, slice.content.size, '\n');
+        return cleanTemplateSpacing(raw);
+      } catch {
+        return slice.content.textBetween(0, slice.content.size, '\n\n');
+      }
     }
   },
   onUpdate: () => {
@@ -570,7 +775,9 @@ const editor = useEditor({
 });
 
 // ─── State Navigasi Heading ala Microsoft Word (Sebelah Kiri) ─────────────────
-const showHeadingNav = ref(true);
+const showHeadingNav = ref(typeof window !== 'undefined' ? window.innerWidth > 1024 : true);
+const isNavDrawerExplicitlyOpened = ref(false);
+const isNavPinned = ref(true); // Default true: navigasi tetap terbuka saat judul diklik
 const navSearchQuery = ref('');
 const activeHeadingId = ref('');
 const collapsedHeadings = ref(new Set());
@@ -579,6 +786,30 @@ const navActiveTab = ref('headings'); // 'headings' | 'stats'
 const copiedHeadingId = ref(null);
 let refreshHeadingsTimeout = null;
 let isScrollingProgrammatically = false;
+
+function toggleHeadingNav() {
+  showHeadingNav.value = !showHeadingNav.value;
+  isNavDrawerExplicitlyOpened.value = showHeadingNav.value;
+}
+
+function openHeadingNavDrawer() {
+  showHeadingNav.value = true;
+  isNavDrawerExplicitlyOpened.value = true;
+}
+
+function closeHeadingNavDrawer() {
+  showHeadingNav.value = false;
+  isNavDrawerExplicitlyOpened.value = false;
+}
+
+// Lompat ke heading dari Quick-Jump Dropdown di atas template
+function onQuickJumpSelect(headingId) {
+  if (!headingId) return;
+  const target = headingsList.value.find(h => h.id === headingId);
+  if (target) {
+    scrollToHeading(target);
+  }
+}
 
 // ─── State Auto Save & Shortcut Ctrl+S ────────────────────────────────────────
 const autoSaveStatus = ref(''); // '' | 'unsaved' | 'saving' | 'saved' | 'error'
@@ -763,9 +994,9 @@ function scrollToHeading(item) {
     isScrollingProgrammatically = false;
   }
 
-  // Pada mobile: otomatis sembunyikan panel setelah memilih heading
-  if (window.innerWidth <= 768) {
-    showHeadingNav.value = false;
+  // Pada tablet / mobile / tab sempit (<= 1024px): sembunyikan drawer HANYA jika TIDAK di-pin
+  if (typeof window !== 'undefined' && window.innerWidth <= 1024 && !isNavPinned.value) {
+    closeHeadingNavDrawer();
   }
 }
 
@@ -848,12 +1079,23 @@ watch(activeView, (newVal) => {
   }
 });
 
+function handleWindowResize() {
+  checkTabScroll();
+  if (typeof window !== 'undefined') {
+    if (window.innerWidth <= 1024 && showHeadingNav.value && !isNavDrawerExplicitlyOpened.value) {
+      showHeadingNav.value = false;
+    } else if (window.innerWidth > 1024 && !showHeadingNav.value && !isNavDrawerExplicitlyOpened.value) {
+      showHeadingNav.value = true;
+    }
+  }
+}
+
 onMounted(() => {
   fetchTemplates();
   window.addEventListener('click', handleGlobalClick);
   window.addEventListener('scroll', handleDocumentScroll, { passive: true });
   window.addEventListener('keydown', handleKeydown);
-  window.addEventListener('resize', checkTabScroll);
+  window.addEventListener('resize', handleWindowResize);
   nextTick(checkTabScroll);
 });
 
@@ -861,7 +1103,7 @@ onBeforeUnmount(() => {
   window.removeEventListener('click', handleGlobalClick);
   window.removeEventListener('scroll', handleDocumentScroll);
   window.removeEventListener('keydown', handleKeydown);
-  window.removeEventListener('resize', checkTabScroll);
+  window.removeEventListener('resize', handleWindowResize);
   if (autoSaveTimeout) {
     clearTimeout(autoSaveTimeout);
   }
@@ -1128,23 +1370,12 @@ async function openCreate() {
   });
 }
 
-// Tutup tab tertentu
-function closeTab(tabId, event) {
-  if (event) event.stopPropagation();
-  if (tabId === 'catalog') return; // Tab katalog permanen, tidak bisa ditutup
-
+// Eksekusi penutupan tab
+function executeCloseTab(tabId) {
   const idx = openTabs.value.findIndex(t => t.id === tabId);
   if (idx === -1) return;
 
   const tabToClose = openTabs.value[idx];
-
-  // Peringatan jika masih ada perubahan yang belum tersimpan
-  if (tabToClose.isDirty || tabToClose.autoSaveStatus === 'unsaved') {
-    const confirmClose = window.confirm(
-      `Template "${tabToClose.form?.title || tabToClose.title}" memiliki perubahan yang belum disimpan. Tetap ingin menutup tab ini?`
-    );
-    if (!confirmClose) return;
-  }
 
   // Bersihkan Blob URL jika ada
   if (tabToClose.pdfBlobUrl) {
@@ -1165,6 +1396,34 @@ function closeTab(tabId, event) {
   // Hapus tab dari daftar
   openTabs.value.splice(idx, 1);
   nextTick(checkTabScroll);
+}
+
+// Tutup tab tertentu
+function closeTab(tabId, event) {
+  if (event) event.stopPropagation();
+  if (tabId === 'catalog') return; // Tab katalog permanen, tidak bisa ditutup
+
+  const idx = openTabs.value.findIndex(t => t.id === tabId);
+  if (idx === -1) return;
+
+  const tabToClose = openTabs.value[idx];
+
+  // Peringatan jika masih ada perubahan yang belum tersimpan
+  if (tabToClose.isDirty || tabToClose.autoSaveStatus === 'unsaved') {
+    openConfirmModal({
+      title: 'Perubahan Belum Disimpan',
+      message: `Template "${tabToClose.form?.title || tabToClose.title}" memiliki perubahan yang belum disimpan. Tetap ingin menutup tab ini?`,
+      confirmText: 'Tutup Tab',
+      cancelText: 'Batal',
+      type: 'warning',
+      onConfirm: () => {
+        executeCloseTab(tabId);
+      }
+    });
+    return;
+  }
+
+  executeCloseTab(tabId);
 }
 
 // Kembali ke katalog tanpa menutup tab
@@ -1208,37 +1467,37 @@ async function handleFileChange(event) {
         { styleMap: docxStyleMap }
       );
 
-      const bodyHtml = result.value || '<p></p>';
-      parsedHtml = docxHeaderHtml ? (docxHeaderHtml + bodyHtml) : bodyHtml;
+      const rawBody = result.value || '<p></p>';
+      // Normalisasi kerapatan spasi: jangan biarkan paragraf kosong beruntun yang membuat template renggang
+      const cleanBody = rawBody
+        .replace(/(<p[^>]*>(\s*(&nbsp;|<br\s*\/?>)?\s*)*<\/p>\s*){2,}/gi, '<p></p>')
+        .trim();
+      parsedHtml = docxHeaderHtml ? (docxHeaderHtml + cleanBody) : cleanBody;
 
-      // Buat tab baru untuk dokumen DOCX yang diunggah
-      const fileTabId = `file-${Date.now()}`;
-      const newTab = {
-        id: fileTabId,
-        title: cleanTitle,
-        type: 'docx',
-        templateId: null,
-        form: {
-          id: null,
-          title: cleanTitle,
-          category: 'Umum',
-          content: parsedHtml,
-          original_filename: fileName,
-          file_path: null,
-          author_name: auth.user?.name || 'Agent',
-          updated_at: new Date()
-        },
-        pdfBlobUrl: '',
-        pdfLoading: false,
-        autoSaveStatus: '',
-        lastSavedTime: null,
-        isDirty: true,
-        activeHeadingId: '',
-        scrollPosition: 0
-      };
+      const formData = new FormData();
+      formData.append('file', file);
+      formData.append('title', cleanTitle);
+      formData.append('category', 'SOP');
+      formData.append('content', parsedHtml);
 
-      openTabs.value.push(newTab);
-      await switchTab(fileTabId);
+      await api.post('/operational-templates', formData, {
+        headers: {
+          'Content-Type': 'multipart/form-data'
+        }
+      });
+      await fetchTemplates();
+
+      const successMsg = `Template "${cleanTitle}" (.docx) berhasil ditambahkan ke katalog.`;
+      uploadSuccess.value = successMsg;
+      showPopupToast({
+        type: 'success',
+        title: 'Berhasil Ditambahkan',
+        message: successMsg
+      });
+      setTimeout(() => {
+        uploadSuccess.value = '';
+      }, 5000);
+      return;
 
     } else if (ext === 'pdf') {
       const arrayBuffer = await file.arrayBuffer();
@@ -1250,25 +1509,23 @@ async function handleFileChange(event) {
       formData.append('category', 'SOP');
       formData.append('content', rawSearchText || cleanTitle);
 
-      const { data: resData } = await api.post('/operational-templates', formData, {
+      await api.post('/operational-templates', formData, {
         headers: {
           'Content-Type': 'multipart/form-data'
         }
       });
       await fetchTemplates();
 
-      uploadSuccess.value = `Dokumen patokan resmi "${cleanTitle}" (PDF) berhasil diunggah tanpa mengubah format aslinya.`;
+      const successMsg = `Dokumen patokan resmi "${cleanTitle}" (PDF) berhasil ditambahkan ke katalog.`;
+      uploadSuccess.value = successMsg;
+      showPopupToast({
+        type: 'success',
+        title: 'Berhasil Ditambahkan',
+        message: successMsg
+      });
       setTimeout(() => {
         uploadSuccess.value = '';
-      }, 4500);
-
-      // Otomatis buka dokumen PDF di tab baru
-      const createdItem = resData?.data || templates.value.find(t => t.title === cleanTitle);
-      if (createdItem) {
-        await openDocument(createdItem);
-      } else {
-        await switchTab('catalog');
-      }
+      }, 5000);
       return;
 
     } else if (ext === 'xlsx' || ext === 'xls' || ext === 'csv') {
@@ -1282,92 +1539,72 @@ async function handleFileChange(event) {
       formData.append('category', 'SOP');
       formData.append('content', parsed.plainText.substring(0, 50000) || cleanTitle);
 
-      let createdItem = null;
-      try {
-        const { data: resData } = await api.post('/operational-templates', formData, {
-          headers: {
-            'Content-Type': 'multipart/form-data'
-          }
-        });
-        createdItem = resData?.data;
-        await fetchTemplates();
-      } catch (err) {
-        console.warn('Gagal menyimpan file Excel ke backend:', err);
-      }
+      await api.post('/operational-templates', formData, {
+        headers: {
+          'Content-Type': 'multipart/form-data'
+        }
+      });
+      await fetchTemplates();
 
-      const fileTabId = `excel-${Date.now()}`;
-      const newTab = {
-        id: fileTabId,
-        title: cleanTitle,
-        type: 'xlsx',
-        templateId: createdItem?.id || null,
-        form: {
-          id: createdItem?.id || null,
-          title: cleanTitle,
-          category: 'SOP',
-          content: parsed.plainText.substring(0, 50000) || cleanTitle,
-          original_filename: fileName,
-          file_path: createdItem?.file_path || null,
-          author_name: auth.user?.name || 'Agent',
-          updated_at: createdItem?.updated_at || new Date()
-        },
-        excelData: parsed,
-        activeExcelSheetIndex: 0,
-        excelBlobUrl: URL.createObjectURL(file),
-        autoSaveStatus: 'saved',
-        lastSavedTime: new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }),
-        isDirty: false,
-        activeHeadingId: '',
-        scrollPosition: 0
-      };
-
-      openTabs.value.push(newTab);
-      await switchTab(fileTabId);
-
-      uploadSuccess.value = `File spreadsheet Excel "${fileName}" (${parsed.sheetNames.length} Sheet, ${parsed.totalRows} baris) berhasil dimuat.`;
+      const successMsg = `File spreadsheet Excel "${fileName}" (${parsed.sheetNames.length} Sheet, ${parsed.totalRows} baris) berhasil ditambahkan ke katalog.`;
+      uploadSuccess.value = successMsg;
+      showPopupToast({
+        type: 'success',
+        title: 'Berhasil Ditambahkan',
+        message: successMsg
+      });
       setTimeout(() => {
         uploadSuccess.value = '';
-      }, 4500);
+      }, 5000);
       return;
 
     } else if (ext === 'txt' || ext === 'md') {
       const rawText = await file.text();
       parsedHtml = parsePlainTextWithHeadings(rawText);
 
-      const fileTabId = `file-${Date.now()}`;
-      const newTab = {
-        id: fileTabId,
-        title: cleanTitle,
-        type: 'txt',
-        templateId: null,
-        form: {
-          id: null,
-          title: cleanTitle,
-          category: 'Umum',
-          content: parsedHtml,
-          original_filename: fileName,
-          file_path: null,
-          author_name: auth.user?.name || 'Agent',
-          updated_at: new Date()
-        },
-        pdfBlobUrl: '',
-        pdfLoading: false,
-        autoSaveStatus: '',
-        lastSavedTime: null,
-        isDirty: true,
-        activeHeadingId: '',
-        scrollPosition: 0
-      };
+      const formData = new FormData();
+      formData.append('file', file);
+      formData.append('title', cleanTitle);
+      formData.append('category', 'Umum');
+      formData.append('content', parsedHtml);
 
-      openTabs.value.push(newTab);
-      await switchTab(fileTabId);
+      await api.post('/operational-templates', formData, {
+        headers: {
+          'Content-Type': 'multipart/form-data'
+        }
+      });
+      await fetchTemplates();
+
+      const successMsg = `Template teks "${cleanTitle}" berhasil ditambahkan ke katalog.`;
+      uploadSuccess.value = successMsg;
+      showPopupToast({
+        type: 'success',
+        title: 'Berhasil Ditambahkan',
+        message: successMsg
+      });
+      setTimeout(() => {
+        uploadSuccess.value = '';
+      }, 5000);
+      return;
     } else {
-      uploadError.value = 'Format file tidak didukung. Harap upload dokumen .docx, .pdf, .txt, .md, .xlsx, atau .xls';
+      const errMsg = 'Format file tidak didukung. Harap upload dokumen .docx, .pdf, .txt, .md, .xlsx, atau .xls';
+      uploadError.value = errMsg;
+      showPopupToast({
+        type: 'error',
+        title: 'Format Tidak Didukung',
+        message: errMsg
+      });
       return;
     }
   } catch (err) {
     console.error('Gagal membaca file template:', err);
-    uploadError.value = 'Gagal memproses file dokumen. Pastikan file tidak rusak.';
+    const errMsg = err.response?.data?.message || 'Gagal memproses file dokumen. Pastikan file tidak rusak.';
+    uploadError.value = errMsg;
+    showPopupToast({
+      type: 'error',
+      title: 'Gagal Upload Dokumen',
+      message: errMsg
+    });
   } finally {
     fileProcessing.value = false;
   }
@@ -1477,24 +1714,28 @@ async function handleSave(isSilent = false) {
   }
 }
 
-// Helper untuk menyalin isi teks murni template ke clipboard
-function extractPlainText(html) {
-  const temp = document.createElement('div');
-  temp.innerHTML = html || '';
-  return temp.textContent || temp.innerText || '';
-}
-
 // Salin teks langsung dari editor dokumen aktif
 async function copyDocumentText() {
   try {
     let text = '';
     if (isDocumentPdf.value) {
       text = form.value.content || '';
-    } else {
-      text = editor.value ? editor.value.getText() : '';
+    } else if (editor.value) {
+      // Gunakan extractPlainText dari HTML editor untuk kerapatan teks yang presisi
+      const html = editor.value.getHTML();
+      text = extractPlainText(html);
+      if (!text.trim()) {
+        text = editor.value.getText({ blockSeparator: '\n' });
+      }
     }
-    await navigator.clipboard.writeText(text);
+    const cleanText = cleanTemplateSpacing(text);
+    await navigator.clipboard.writeText(cleanText);
     isDocumentCopied.value = true;
+    showPopupToast({
+      type: 'success',
+      title: 'Tersalin!',
+      message: 'Naskah template berhasil disalin dengan kerapatan teks yang rapi.'
+    });
     setTimeout(() => {
       isDocumentCopied.value = false;
     }, 2000);
@@ -1508,8 +1749,14 @@ async function copyCardText(template) {
   try {
     const isPdf = template.original_filename?.toLowerCase().endsWith('.pdf');
     const text = isPdf ? (template.content || '') : extractPlainText(template.content);
-    await navigator.clipboard.writeText(text);
+    const cleanText = cleanTemplateSpacing(text);
+    await navigator.clipboard.writeText(cleanText);
     copiedId.value = template.id;
+    showPopupToast({
+      type: 'success',
+      title: 'Tersalin!',
+      message: `Template "${template.title}" berhasil disalin.`
+    });
     setTimeout(() => {
       if (copiedId.value === template.id) {
         copiedId.value = null;
@@ -1553,7 +1800,11 @@ async function downloadOriginalFile(template) {
     URL.revokeObjectURL(url);
   } catch (err) {
     console.error('Gagal mengunduh file asli:', err);
-    alert('Gagal mengunduh file asli dari server.');
+    showPopupToast({
+      type: 'error',
+      title: 'Gagal Download',
+      message: 'Gagal mengunduh file asli dari server.'
+    });
   }
 }
 
@@ -1572,7 +1823,11 @@ async function downloadOriginalPdf(template) {
     URL.revokeObjectURL(url);
   } catch (err) {
     console.error('Gagal mengunduh file PDF asli:', err);
-    alert('Gagal mengunduh file PDF asli.');
+    showPopupToast({
+      type: 'error',
+      title: 'Gagal Download',
+      message: 'Gagal mengunduh file PDF asli dari server.'
+    });
   }
 }
 
@@ -1580,7 +1835,7 @@ async function downloadOriginalPdf(template) {
 function downloadActiveDocx() {
   const title = form.value.title || 'Template';
   const content = editor.value ? editor.value.getHTML() : '';
-  const header = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${title}</title><style>body{font-family:Calibri,Arial,sans-serif;font-size:11pt;line-height:1.5;color:#1e293b;}</style></head><body><h2>${title}</h2>${content}</body></html>`;
+  const header = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${title}</title><style>body{font-family:'Calibri',Arial,sans-serif;font-size:11pt;line-height:1.28;letter-spacing:-0.012em;color:#1e293b;}p{margin:0 0 0.35em;line-height:1.28;}h1,h2,h3{margin:0.6em 0 0.2em;}</style></head><body><h2>${title}</h2>${content}</body></html>`;
 
   const blob = new Blob(['\ufeff' + header], {
     type: 'application/msword;charset=utf-8'
@@ -1622,7 +1877,7 @@ function downloadAsTxt(template) {
 function downloadAsDocx(template) {
   const title = template.title || 'Template';
   const content = template.content || '';
-  const header = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${title}</title><style>body{font-family:Calibri,Arial,sans-serif;font-size:11pt;line-height:1.5;color:#1e293b;}</style></head><body><h2>${title}</h2>${content}</body></html>`;
+  const header = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${title}</title><style>body{font-family:'Calibri',Arial,sans-serif;font-size:11pt;line-height:1.28;letter-spacing:-0.012em;color:#1e293b;}p{margin:0 0 0.35em;line-height:1.28;}h1,h2,h3{margin:0.6em 0 0.2em;}</style></head><body><h2>${title}</h2>${content}</body></html>`;
 
   const blob = new Blob(['\ufeff' + header], {
     type: 'application/msword;charset=utf-8'
@@ -1636,36 +1891,69 @@ function downloadAsDocx(template) {
 }
 
 // Hapus dokumen aktif
-async function deleteActiveDocument() {
+function deleteActiveDocument() {
   if (!form.value.id) {
-    closeTab(activeTabId.value);
+    executeCloseTab(activeTabId.value);
     return;
   }
-  if (!confirm(`Hapus template "${form.value.title}"?`)) return;
-
-  try {
-    await api.delete(`/operational-templates/${form.value.id}`);
-    closeTab(activeTabId.value);
-    fetchTemplates();
-  } catch (err) {
-    alert(err.response?.data?.message || 'Gagal menghapus template.');
-  }
+  const titleToDelete = form.value.title;
+  openConfirmModal({
+    title: 'Hapus Template Aktif?',
+    message: `Apakah Anda yakin ingin menghapus template "${titleToDelete}"? Dokumen ini akan dihapus dari katalog dan tab ditutup.`,
+    confirmText: 'Ya, Hapus',
+    cancelText: 'Batal',
+    type: 'danger',
+    onConfirm: async () => {
+      try {
+        await api.delete(`/operational-templates/${form.value.id}`);
+        executeCloseTab(activeTabId.value);
+        await fetchTemplates();
+        showPopupToast({
+          type: 'success',
+          title: 'Template Dihapus',
+          message: `Template "${titleToDelete}" berhasil dihapus dari katalog.`
+        });
+      } catch (err) {
+        showPopupToast({
+          type: 'error',
+          title: 'Gagal Menghapus',
+          message: err.response?.data?.message || 'Gagal menghapus template dari server.'
+        });
+      }
+    }
+  });
 }
 
-// Hapus template dari kartu
-async function deleteTemplate(template) {
-  if (!confirm(`Hapus template "${template.title}"?`)) return;
-
-  try {
-    await api.delete(`/operational-templates/${template.id}`);
-    const tabIdx = openTabs.value.findIndex(t => t.templateId === template.id);
-    if (tabIdx !== -1) {
-      closeTab(openTabs.value[tabIdx].id);
+// Hapus template dari kartu katalog
+function deleteTemplate(template) {
+  openConfirmModal({
+    title: 'Hapus Template?',
+    message: `Apakah Anda yakin ingin menghapus template "${template.title}" dari katalog operasional? Tindakan ini tidak dapat dibatalkan.`,
+    confirmText: 'Ya, Hapus',
+    cancelText: 'Batal',
+    type: 'danger',
+    onConfirm: async () => {
+      try {
+        await api.delete(`/operational-templates/${template.id}`);
+        const tabIdx = openTabs.value.findIndex(t => t.templateId === template.id);
+        if (tabIdx !== -1) {
+          executeCloseTab(openTabs.value[tabIdx].id);
+        }
+        await fetchTemplates();
+        showPopupToast({
+          type: 'success',
+          title: 'Template Dihapus',
+          message: `Template "${template.title}" berhasil dihapus dari katalog.`
+        });
+      } catch (err) {
+        showPopupToast({
+          type: 'error',
+          title: 'Gagal Menghapus',
+          message: err.response?.data?.message || 'Gagal menghapus template dari server.'
+        });
+      }
     }
-    fetchTemplates();
-  } catch (err) {
-    alert(err.response?.data?.message || 'Gagal menghapus template.');
-  }
+  });
 }
 
 function formatDate(val) {
@@ -2597,7 +2885,7 @@ function formatDate(val) {
             type="button"
             class="tb-btn tb-btn-nav"
             :class="{ active: showHeadingNav }"
-            @click="showHeadingNav = !showHeadingNav"
+            @click="toggleHeadingNav"
             :title="showHeadingNav ? 'Tutup panel navigasi heading' : 'Buka panel navigasi heading di sebelah kiri'"
           >
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
@@ -2857,8 +3145,69 @@ function formatDate(val) {
 
       <!-- Jika Non-PDF (Word/TXT): Lembar Dokumen TipTap Langsung Diedit dengan Navigasi Heading di Kiri -->
       <div v-else class="doc-body-wrapper">
+        <!-- Quick Jump Heading Bar (Sangat praktis untuk navigasi instan tanpa memakan ruang samping) -->
+        <div v-if="headingsList.length > 0" class="quick-jump-bar">
+          <div class="quick-jump-label">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 2 2h12a2 2 0 0 2-2V8z"></path>
+              <polyline points="14 2 14 8 20 8"></polyline>
+              <line x1="16" y1="13" x2="8" y2="13"></line>
+              <line x1="16" y1="17" x2="8" y2="17"></line>
+            </svg>
+            <span class="quick-jump-text">Lompat ke Judul:</span>
+          </div>
+
+          <div class="quick-jump-select-wrap">
+            <select
+              class="quick-jump-select"
+              :value="activeHeadingId"
+              @change="onQuickJumpSelect($event.target.value)"
+              aria-label="Pilih judul template untuk melompat"
+            >
+              <option value="" disabled>-- Pilih Bagian Template ({{ headingsList.length }} judul) --</option>
+              <option
+                v-for="item in headingsList"
+                :key="item.id"
+                :value="item.id"
+              >
+                {{ item.level === 1 ? '📌 ' : item.level === 2 ? '   ↳ ' : '      • ' }}{{ item.text }}
+              </option>
+            </select>
+            <span class="quick-jump-arrow">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                <polyline points="6 9 12 15 18 9"></polyline>
+              </svg>
+            </span>
+          </div>
+
+          <button
+            type="button"
+            class="btn-toggle-nav-inline"
+            :class="{ active: showHeadingNav }"
+            @click="toggleHeadingNav"
+            :title="showHeadingNav ? 'Tutup sidebar navigasi Word' : 'Buka sidebar navigasi Word lengkap'"
+          >
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+              <line x1="21" y1="6" x2="3" y2="6"></line>
+              <line x1="15" y1="12" x2="3" y2="12"></line>
+              <line x1="17" y1="18" x2="3" y2="18"></line>
+            </svg>
+            <span>{{ showHeadingNav ? 'Tutup Sidebar' : 'Sidebar Lengkap' }}</span>
+          </button>
+        </div>
+
         <div class="doc-editor-layout">
           
+          <!-- Backdrop Navigasi saat layar <= 1024px (Mobile/Tablet/Narrow Tab) -->
+          <transition name="fade-nav-backdrop">
+            <div
+              v-if="showHeadingNav"
+              class="word-nav-backdrop"
+              @click="closeHeadingNavDrawer"
+              aria-label="Tutup navigasi"
+            ></div>
+          </transition>
+
           <!-- Panel Navigasi Heading ala Microsoft Word di Sebelah KIRI -->
           <aside
             v-if="showHeadingNav"
@@ -2869,7 +3218,7 @@ function formatDate(val) {
             <div class="word-nav-header">
               <div class="word-nav-title-wrap">
                 <svg class="word-nav-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
-                  <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                  <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 2-2V8z"></path>
                   <polyline points="14 2 14 8 20 8"></polyline>
                   <line x1="16" y1="13" x2="8" y2="13"></line>
                   <line x1="16" y1="17" x2="8" y2="17"></line>
@@ -2880,18 +3229,34 @@ function formatDate(val) {
                   {{ headingsList.length }}
                 </span>
               </div>
-              <button
-                type="button"
-                class="btn-word-nav-close"
-                @click="showHeadingNav = false"
-                title="Tutup panel navigasi"
-                aria-label="Tutup panel navigasi"
-              >
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
-                  <line x1="18" y1="6" x2="6" y2="18"></line>
-                  <line x1="6" y1="6" x2="18" y2="18"></line>
-                </svg>
-              </button>
+              <div class="word-nav-header-actions">
+                <button
+                  type="button"
+                  class="btn-word-nav-pin"
+                  :class="{ 'is-pinned': isNavPinned }"
+                  @click="isNavPinned = !isNavPinned"
+                  :title="isNavPinned ? 'Navigasi di-pin (tetap terbuka saat judul diklik)' : 'Navigasi tidak di-pin (otomatis tutup saat judul diklik)'"
+                  aria-label="Pin Navigasi"
+                >
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+                    <line x1="12" y1="17" x2="12" y2="22"></line>
+                    <path d="M5 17h14v-2l-2-2V5a2 2 0 0 0-2-2H9a2 2 0 0 0-2 2v8l-2 2v2z"></path>
+                  </svg>
+                  <span class="pin-status-label">{{ isNavPinned ? 'Tetap Buka' : 'Auto-tutup' }}</span>
+                </button>
+                <button
+                  type="button"
+                  class="btn-word-nav-close"
+                  @click="closeHeadingNavDrawer"
+                  title="Tutup panel navigasi"
+                  aria-label="Tutup panel navigasi"
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                    <line x1="18" y1="6" x2="6" y2="18"></line>
+                    <line x1="6" y1="6" x2="18" y2="18"></line>
+                  </svg>
+                </button>
+              </div>
             </div>
 
             <!-- Search Document Box (Persis MS Word) -->
@@ -3119,6 +3484,24 @@ function formatDate(val) {
             <EditorContent :editor="editor" />
           </div>
 
+          <!-- Tombol Mengambang (Floating Action) untuk memunculkan kembali Navigasi saat ditutup di layar <= 1024px -->
+          <button
+            v-if="!showHeadingNav && headingsList.length > 0"
+            type="button"
+            class="floating-nav-trigger"
+            @click="openHeadingNavDrawer"
+            title="Buka Navigasi Heading"
+            aria-label="Buka Navigasi Heading"
+          >
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 2 2h12a2 2 0 0 2-2V8z"></path>
+              <polyline points="14 2 14 8 20 8"></polyline>
+              <line x1="16" y1="13" x2="8" y2="13"></line>
+              <line x1="16" y1="17" x2="8" y2="17"></line>
+            </svg>
+            <span>Daftar Isi ({{ headingsList.length }})</span>
+          </button>
+
         </div>
       </div>
 
@@ -3190,6 +3573,88 @@ function formatDate(val) {
       </div>
 
     </article>
+
+    <!-- ── Modal Konfirmasi Kustom (Tanpa Header URL Browser / Source Link) ── -->
+    <Teleport to="body">
+      <transition name="modal-fade">
+        <div v-if="confirmModal.isOpen" class="custom-dialog-overlay" @click.self="handleCancelConfirm">
+          <div class="custom-dialog-box" role="dialog" aria-modal="true">
+            <div class="custom-dialog-header">
+              <div class="dialog-icon-circle" :class="confirmModal.type === 'danger' ? 'icon-danger' : 'icon-warning'">
+                <svg v-if="confirmModal.type === 'danger'" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                  <polyline points="3 6 5 6 21 6"></polyline>
+                  <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+                  <line x1="10" y1="11" x2="10" y2="17"></line>
+                  <line x1="14" y1="11" x2="14" y2="17"></line>
+                </svg>
+                <svg v-else width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path>
+                  <line x1="12" y1="9" x2="12" y2="13"></line>
+                  <line x1="12" y1="17" x2="12.01" y2="17"></line>
+                </svg>
+              </div>
+              <button type="button" class="dialog-close-btn" @click="handleCancelConfirm" aria-label="Tutup dialog">
+                &times;
+              </button>
+            </div>
+
+            <div class="custom-dialog-content">
+              <h4 class="custom-dialog-title">{{ confirmModal.title }}</h4>
+              <p class="custom-dialog-message">{{ confirmModal.message }}</p>
+            </div>
+
+            <div class="custom-dialog-footer">
+              <button type="button" class="dialog-btn-cancel" @click="handleCancelConfirm">
+                {{ confirmModal.cancelText }}
+              </button>
+              <button
+                type="button"
+                class="dialog-btn-action"
+                :class="confirmModal.type === 'danger' ? 'dialog-btn-danger' : 'dialog-btn-warning'"
+                @click="handleConfirmAction"
+              >
+                {{ confirmModal.confirmText }}
+              </button>
+            </div>
+          </div>
+        </div>
+      </transition>
+    </Teleport>
+
+    <!-- ── Floating Popup Toast Notifikasi (Tanpa Source Link Browser) ── -->
+    <Teleport to="body">
+      <transition name="toast-slide">
+        <div v-if="toastPopup.isOpen" class="popup-toast-wrapper">
+          <div class="popup-toast-box" :class="'toast-' + toastPopup.type" role="alert">
+            <div class="toast-icon-circle">
+              <svg v-if="toastPopup.type === 'success'" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path>
+                <polyline points="22 4 12 14.01 9 11.01"></polyline>
+              </svg>
+              <svg v-else-if="toastPopup.type === 'error'" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="12" cy="12" r="10"></circle>
+                <line x1="15" y1="9" x2="9" y2="15"></line>
+                <line x1="9" y1="9" x2="15" y2="15"></line>
+              </svg>
+              <svg v-else width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="12" cy="12" r="10"></circle>
+                <line x1="12" y1="16" x2="12" y2="12"></line>
+                <line x1="12" y1="8" x2="12.01" y2="8"></line>
+              </svg>
+            </div>
+
+            <div class="toast-content-col">
+              <span class="toast-title-text">{{ toastPopup.title }}</span>
+              <span class="toast-desc-text">{{ toastPopup.message }}</span>
+            </div>
+
+            <button type="button" class="toast-dismiss-btn" @click="closePopupToast" aria-label="Tutup notifikasi">
+              &times;
+            </button>
+          </div>
+        </div>
+      </transition>
+    </Teleport>
 
   </div>
 </template>
@@ -5104,6 +5569,108 @@ function formatDate(val) {
   border-radius: 0 0 12px 12px;
 }
 
+/* ─── Quick Jump Heading Bar di Atas Lembar Template ─── */
+.quick-jump-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: #ffffff;
+  border: 1px solid #cbd5e1;
+  border-radius: 9px;
+  padding: 8px 12px;
+  margin-bottom: 12px;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.04);
+  flex-wrap: wrap;
+}
+
+.quick-jump-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: #1e293b;
+  white-space: nowrap;
+}
+
+.quick-jump-label svg {
+  color: #2563eb;
+}
+
+.quick-jump-select-wrap {
+  flex: 1 1 200px;
+  position: relative;
+  min-width: 160px;
+}
+
+.quick-jump-select {
+  width: 100%;
+  appearance: none;
+  -webkit-appearance: none;
+  background: #f8fafc;
+  border: 1px solid #cbd5e1;
+  border-radius: 7px;
+  padding: 6px 28px 6px 10px;
+  font-size: 0.83rem;
+  font-weight: 600;
+  color: #1e293b;
+  cursor: pointer;
+  outline: none;
+  transition: all 0.15s ease;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.quick-jump-select:hover {
+  background: #ffffff;
+  border-color: #94a3b8;
+}
+
+.quick-jump-select:focus {
+  background: #ffffff;
+  border-color: #2563eb;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.15);
+}
+
+.quick-jump-arrow {
+  position: absolute;
+  right: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+  pointer-events: none;
+  color: #64748b;
+  display: flex;
+  align-items: center;
+}
+
+.btn-toggle-nav-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  background: #f1f5f9;
+  border: 1px solid #cbd5e1;
+  border-radius: 7px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: #334155;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  white-space: nowrap;
+}
+
+.btn-toggle-nav-inline:hover {
+  background: #e2e8f0;
+  color: #0f172a;
+}
+
+.btn-toggle-nav-inline.active {
+  background: #eff6ff;
+  border-color: #bfdbfe;
+  color: #1d4ed8;
+}
+
 .doc-editor-layout {
   display: flex;
   align-items: flex-start;
@@ -5116,12 +5683,14 @@ function formatDate(val) {
   flex: 1 1 0%;
   min-width: 0;
   background: #ffffff;
-  padding: 30px 38px;
+  padding: 32px 42px;
   border-radius: 8px;
   border: 1px solid #cbd5e1;
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.04);
-  font-size: 0.95rem;
-  line-height: 1.7;
+  font-family: 'Calibri', 'Aptos', 'Segoe UI', -apple-system, BlinkMacSystemFont, Arial, sans-serif;
+  font-size: 11pt;
+  line-height: 1.25;
+  letter-spacing: -0.012em;
   color: #1e293b;
   min-height: 480px;
   cursor: text;
@@ -5145,6 +5714,26 @@ function formatDate(val) {
   overflow: hidden;
   transition: all 0.2s ease;
   user-select: none;
+}
+
+/* Backdrop navigasi mobile/tablet (default tersembunyi pada desktop) */
+.word-nav-backdrop {
+  display: none;
+}
+
+/* Tombol mengambang buka navigasi (default tersembunyi pada desktop) */
+.floating-nav-trigger {
+  display: none;
+}
+
+.fade-nav-backdrop-enter-active,
+.fade-nav-backdrop-leave-active {
+  transition: opacity 0.2s ease;
+}
+
+.fade-nav-backdrop-enter-from,
+.fade-nav-backdrop-leave-to {
+  opacity: 0;
 }
 
 .word-nav-header {
@@ -5177,6 +5766,40 @@ function formatDate(val) {
   padding: 1px 7px;
   border-radius: 10px;
   border: 1px solid #dbeafe;
+}
+
+.word-nav-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.btn-word-nav-pin {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  border-radius: 6px;
+  border: 1px solid #e2e8f0;
+  background: #ffffff;
+  color: #64748b;
+  font-size: 0.72rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.btn-word-nav-pin:hover {
+  background: #f8fafc;
+  color: #1e293b;
+  border-color: #cbd5e1;
+}
+
+.btn-word-nav-pin.is-pinned {
+  background: #eff6ff;
+  color: #2563eb;
+  border-color: #bfdbfe;
+  font-weight: 700;
 }
 
 .btn-word-nav-close {
@@ -5807,15 +6430,24 @@ function formatDate(val) {
 :deep(.tiptap-editor-body) {
   outline: none;
   min-height: 350px;
+  font-family: 'Calibri', 'Aptos', 'Segoe UI', -apple-system, BlinkMacSystemFont, Arial, sans-serif;
+  font-size: 11pt;
+  line-height: 1.28;
+  letter-spacing: -0.012em;
+  color: #1e293b;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
 }
 
 :deep(.tiptap-editor-body h1) {
-  font-size: 1.45rem;
+  font-size: 1.35rem;
   font-weight: 800;
   color: #0f172a;
-  margin: 1.2em 0 0.4em;
-  border-bottom: 2px solid #e2e8f0;
-  padding-bottom: 6px;
+  line-height: 1.22;
+  letter-spacing: -0.015em;
+  margin: 0.75em 0 0.25em;
+  border-bottom: 1.5px solid #e2e8f0;
+  padding-bottom: 4px;
 }
 
 :deep(.tiptap-editor-body h1:first-child) {
@@ -5823,41 +6455,57 @@ function formatDate(val) {
 }
 
 :deep(.tiptap-editor-body h2) {
-  font-size: 1.25rem;
+  font-size: 1.18rem;
   font-weight: 700;
   color: #1e293b;
-  margin: 1.1em 0 0.35em;
+  line-height: 1.25;
+  letter-spacing: -0.012em;
+  margin: 0.65em 0 0.2em;
 }
 
 :deep(.tiptap-editor-body h3) {
-  font-size: 1.08rem;
+  font-size: 1.05rem;
   font-weight: 700;
   color: #334155;
-  margin: 0.9em 0 0.3em;
+  line-height: 1.25;
+  letter-spacing: -0.01em;
+  margin: 0.55em 0 0.18em;
 }
 
 :deep(.tiptap-editor-body p) {
-  margin: 0 0 0.85em;
+  margin: 0 0 0.2em;
+  line-height: 1.25;
+  letter-spacing: -0.012em;
+}
+
+/* Kerapatan baris kosong / enter pada dokumen Word */
+:deep(.tiptap-editor-body p:empty),
+:deep(.tiptap-editor-body p:has(> br:only-child)) {
+  margin: 0.06em 0;
+  min-height: 0.95em;
 }
 
 :deep(.tiptap-editor-body ul),
 :deep(.tiptap-editor-body ol) {
-  padding-left: 24px;
-  margin: 0 0 0.85em;
+  padding-left: 22px;
+  margin: 0 0 0.35em;
+  line-height: 1.28;
 }
 
 :deep(.tiptap-editor-body li) {
-  margin-bottom: 0.25em;
+  margin-bottom: 0.12em;
+  letter-spacing: -0.012em;
 }
 
 :deep(.tiptap-editor-body blockquote) {
-  border-left: 4px solid #2563eb;
-  padding: 10px 16px;
+  border-left: 3.5px solid #2563eb;
+  padding: 6px 14px;
   background: #f8fafc;
   color: #475569;
   font-style: italic;
-  border-radius: 0 8px 8px 0;
-  margin: 1em 0;
+  border-radius: 0 6px 6px 0;
+  margin: 0.5em 0;
+  line-height: 1.3;
 }
 
 :deep(.tiptap-editor-body code) {
@@ -5872,31 +6520,35 @@ function formatDate(val) {
 :deep(.tiptap-editor-body hr) {
   border: none;
   border-top: 1px solid #cbd5e1;
-  margin: 1.2em 0;
+  margin: 0.8em 0;
 }
 
 :deep(.tiptap-editor-body .docx-header-line) {
   background: #eff6ff;
   border-left: 4px solid #2563eb;
-  padding: 8px 14px;
+  padding: 6px 12px;
   color: #1d4ed8;
   font-weight: 600;
   font-size: 0.82rem;
-  border-radius: 0 8px 8px 0;
-  margin-bottom: 16px;
+  border-radius: 0 6px 6px 0;
+  margin-bottom: 12px;
+  line-height: 1.28;
 }
 
 :deep(.tiptap-editor-body table) {
   border-collapse: collapse;
   width: 100%;
-  margin: 1em 0;
+  margin: 0.6em 0;
+  font-size: 10pt;
 }
 
 :deep(.tiptap-editor-body th),
 :deep(.tiptap-editor-body td) {
   border: 1px solid #cbd5e1;
-  padding: 8px 12px;
+  padding: 4px 8px;
   text-align: left;
+  line-height: 1.25;
+  letter-spacing: -0.01em;
 }
 
 :deep(.tiptap-editor-body th) {
@@ -5924,6 +6576,110 @@ function formatDate(val) {
   gap: 6px;
   font-size: 0.82rem;
   color: #64748b;
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   RESPONSIVE DESIGN SAAT TAB / JENDELA DIKECILKAN (<= 1024px)
+   - Lembar template dibuat LEBAR & LEGA (tidak terhimpit sidebar navigasi)
+   - Panel navigasi menjadi slide-over drawer interaktif dengan backdrop
+   ══════════════════════════════════════════════════════════════════════════ */
+@media (max-width: 1024px) {
+  .doc-editor-layout {
+    display: block;
+    width: 100%;
+    position: relative;
+  }
+
+  .doc-paper-sheet {
+    width: 100% !important;
+    max-width: 100% !important;
+    flex: none;
+    padding: 24px 28px;
+    font-size: 11.5pt;
+    line-height: 1.34;
+    box-sizing: border-box;
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.05);
+    border-radius: 10px;
+  }
+
+  :deep(.tiptap-editor-body) {
+    font-size: 11.5pt;
+    line-height: 1.34;
+  }
+
+  :deep(.tiptap-editor-body h1) {
+    font-size: 1.38rem;
+  }
+
+  :deep(.tiptap-editor-body h2) {
+    font-size: 1.2rem;
+  }
+
+  /* Backdrop gelap dinonaktifkan agar template di belakang tetap terang dan mudah dibaca */
+  .word-nav-backdrop {
+    display: none !important;
+  }
+
+  /* Panel Navigasi Mode Floating Sidebar */
+  .word-nav-pane {
+    position: fixed;
+    top: 60px;
+    left: 12px;
+    bottom: 24px;
+    height: auto;
+    max-height: calc(100vh - 84px);
+    width: min(320px, 84vw);
+    z-index: 9999;
+    background: rgba(255, 255, 255, 0.98);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border-radius: 14px;
+    border: 1px solid #cbd5e1;
+    box-shadow: 0 16px 40px rgba(15, 23, 42, 0.22);
+    animation: slideNavIn 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+  }
+
+  /* Tombol Mengambang (Floating Action) untuk memunculkan kembali Navigasi */
+  .floating-nav-trigger {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    position: fixed;
+    bottom: 24px;
+    left: 20px;
+    z-index: 950;
+    padding: 9px 16px;
+    background: #2563eb;
+    color: #ffffff;
+    font-size: 0.86rem;
+    font-weight: 600;
+    border: none;
+    border-radius: 999px;
+    box-shadow: 0 6px 20px rgba(37, 99, 235, 0.38);
+    cursor: pointer;
+    transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  }
+
+  .floating-nav-trigger:hover {
+    background: #1d4ed8;
+    transform: translateY(-2px);
+    box-shadow: 0 8px 24px rgba(37, 99, 235, 0.48);
+  }
+
+  .floating-nav-trigger svg {
+    color: #ffffff;
+  }
+}
+
+@keyframes slideNavIn {
+  from {
+    transform: translateX(-100%);
+    opacity: 0;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
 }
 
 /* ══════════════════════════════════════════════════════════════════════════
@@ -6114,25 +6870,302 @@ function formatDate(val) {
   }
 
   /* Responsive Heading Navigation Panel pada Mobile */
-  .doc-editor-layout {
-    flex-direction: column;
+  .word-nav-pane {
+    top: 56px;
+    left: 8px;
+    bottom: 76px;
+    width: min(300px, calc(100vw - 16px));
+    height: auto;
+    max-height: calc(100vh - 136px);
+    border-radius: 12px;
   }
 
-  .word-nav-pane {
-    position: fixed;
-    top: 60px;
-    left: 10px;
-    right: auto;
-    bottom: 80px;
-    width: min(320px, calc(100vw - 20px));
-    max-height: none;
-    z-index: 1050;
-    box-shadow: 0 10px 30px rgba(15, 23, 42, 0.25);
-    border-radius: 12px;
+  .floating-nav-trigger {
+    bottom: 78px;
+    left: 14px;
+    padding: 7px 14px;
+    font-size: 0.82rem;
   }
 
   .tb-btn-nav-text {
     display: none;
   }
+}
+
+/* ─── Custom In-App Popup Confirm Dialog (No Browser Origin / Source Link) ─── */
+.custom-dialog-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.55);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 99999;
+  padding: 16px;
+}
+
+.custom-dialog-box {
+  background: #ffffff;
+  border-radius: 18px;
+  width: 100%;
+  max-width: 440px;
+  box-shadow: 0 20px 40px -8px rgba(15, 23, 42, 0.25), 0 1px 3px rgba(15, 23, 42, 0.08);
+  border: 1px solid #e2e8f0;
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  animation: dialogPopIn 0.18s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes dialogPopIn {
+  0% {
+    opacity: 0;
+    transform: scale(0.95) translateY(6px);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
+.custom-dialog-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.dialog-icon-circle {
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.dialog-icon-circle.icon-danger {
+  background: #fee2e2;
+  color: #dc2626;
+  border: 1px solid #fecaca;
+}
+
+.dialog-icon-circle.icon-warning {
+  background: #fef3c7;
+  color: #d97706;
+  border: 1px solid #fde68a;
+}
+
+.dialog-close-btn {
+  background: none;
+  border: none;
+  color: #94a3b8;
+  font-size: 1.4rem;
+  line-height: 1;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 6px;
+  transition: all 0.15s ease;
+}
+
+.dialog-close-btn:hover {
+  background: #f1f5f9;
+  color: #0f172a;
+}
+
+.custom-dialog-content {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.custom-dialog-title {
+  margin: 0;
+  font-size: 1.12rem;
+  font-weight: 700;
+  color: #0f172a;
+}
+
+.custom-dialog-message {
+  margin: 0;
+  font-size: 0.88rem;
+  color: #475569;
+  line-height: 1.5;
+}
+
+.custom-dialog-footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  padding-top: 8px;
+}
+
+.dialog-btn-cancel {
+  padding: 9px 16px;
+  border-radius: 10px;
+  border: 1.5px solid #cbd5e1;
+  background: #ffffff;
+  color: #475569;
+  font-size: 0.84rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.dialog-btn-cancel:hover {
+  background: #f1f5f9;
+  color: #0f172a;
+  border-color: #94a3b8;
+}
+
+.dialog-btn-action {
+  padding: 9px 18px;
+  border-radius: 10px;
+  border: none;
+  font-size: 0.84rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.dialog-btn-danger {
+  background: #dc2626;
+  color: #ffffff;
+  box-shadow: 0 4px 12px rgba(220, 38, 38, 0.25);
+}
+
+.dialog-btn-danger:hover {
+  background: #b91c1c;
+  transform: translateY(-1px);
+}
+
+.dialog-btn-warning {
+  background: #d97706;
+  color: #ffffff;
+  box-shadow: 0 4px 12px rgba(217, 119, 6, 0.25);
+}
+
+.dialog-btn-warning:hover {
+  background: #b45309;
+  transform: translateY(-1px);
+}
+
+/* ─── Floating Popup Toast Notification (Top Center) ─── */
+.popup-toast-wrapper {
+  position: fixed;
+  top: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 100000;
+  pointer-events: none;
+  width: 90%;
+  max-width: 520px;
+}
+
+.popup-toast-box {
+  pointer-events: auto;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 18px;
+  border-radius: 14px;
+  background: #ffffff;
+  box-shadow: 0 16px 36px -6px rgba(15, 23, 42, 0.18), 0 4px 10px rgba(15, 23, 42, 0.06);
+  border: 1.5px solid #e2e8f0;
+}
+
+.popup-toast-box.toast-success {
+  border-color: #86efac;
+  background: #f0fdf4;
+}
+
+.popup-toast-box.toast-success .toast-icon-circle {
+  background: #dcfce7;
+  color: #15803d;
+}
+
+.popup-toast-box.toast-error {
+  border-color: #fca5a5;
+  background: #fef2f2;
+}
+
+.popup-toast-box.toast-error .toast-icon-circle {
+  background: #fee2e2;
+  color: #dc2626;
+}
+
+.toast-icon-circle {
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.toast-content-col {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+}
+
+.toast-title-text {
+  font-size: 0.88rem;
+  font-weight: 800;
+  color: #0f172a;
+}
+
+.toast-desc-text {
+  font-size: 0.82rem;
+  color: #475569;
+  line-height: 1.4;
+  word-break: break-word;
+}
+
+.toast-dismiss-btn {
+  background: none;
+  border: none;
+  color: #94a3b8;
+  font-size: 1.4rem;
+  line-height: 1;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 6px;
+  transition: all 0.15s ease;
+  flex-shrink: 0;
+}
+
+.toast-dismiss-btn:hover {
+  background: rgba(0, 0, 0, 0.06);
+  color: #0f172a;
+}
+
+/* Transitions */
+.toast-slide-enter-active,
+.toast-slide-leave-active {
+  transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.toast-slide-enter-from,
+.toast-slide-leave-to {
+  opacity: 0;
+  transform: translate(-50%, -20px) scale(0.96);
+}
+
+.modal-fade-enter-active,
+.modal-fade-leave-active {
+  transition: opacity 0.2s ease;
+}
+
+.modal-fade-enter-from,
+.modal-fade-leave-to {
+  opacity: 0;
 }
 </style>
